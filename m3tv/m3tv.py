@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 APP_DIR = Path(__file__).resolve().parent
 WEB_DIR = APP_DIR / "web"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "m3-tvui"
@@ -37,7 +37,7 @@ DATA_DIR = Path(
 )
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_PORT = 8787
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 DEFAULT_HOTKEY = "ctrl+x"
 
 # Smart-TV user agent so youtube.com/tv serves the TV ("Leanback") interface.
@@ -63,6 +63,15 @@ DEFAULT_SERVICES = [
     {"id": "plex", "name": "Plex", "subtitle": "Your media library", "url": "https://app.plex.tv", "hue": 80, "profile": "web"},
     {"id": "spotify", "name": "Spotify", "subtitle": "Music and podcasts", "url": "https://open.spotify.com", "hue": 155, "profile": "web"},
 ]
+
+_GROUPS = {
+    "youtube": "Featured", "youtube-tv": "Featured", "netflix": "Featured", "disney": "Featured",
+    "prime": "More streaming", "hbo": "More streaming", "hulu": "More streaming",
+    "paramount": "More streaming", "peacock": "More streaming", "crunchyroll": "More streaming",
+    "twitch": "Live, music and library", "plex": "Live, music and library", "spotify": "Live, music and library",
+}
+for _svc in DEFAULT_SERVICES:
+    _svc["group"] = _GROUPS.get(_svc["id"], "Your apps")
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
@@ -106,6 +115,7 @@ def clean_service(raw):
         "url": url,
         "hue": hue,
         "profile": profile,
+        "group": str(raw.get("group", "")).strip()[:30] or "Your apps",
     }
 
 
@@ -149,6 +159,7 @@ def load_config() -> dict:
         "firefox_profile": None,
         "weather": None,
         "units": "auto",
+        "recent": [],
         "services": DEFAULT_SERVICES,
     }
     try:
@@ -185,6 +196,13 @@ def load_config() -> dict:
     if version < 2:  # the YouTube Classic tile was removed in config version 2
         cfg["services"] = [s for s in cfg["services"] if s["id"] != "youtube-classic"]
     cfg["services"] = cfg["services"] or clean_services(DEFAULT_SERVICES)
+    if version < 3:  # rows on the home screen: give the stock apps their groups
+        for svc in cfg["services"]:
+            if svc["group"] == "Your apps" and svc["id"] in _GROUPS:
+                svc["group"] = _GROUPS[svc["id"]]
+    ids = {svc["id"] for svc in cfg["services"]}
+    recent = cfg.get("recent")
+    cfg["recent"] = list(dict.fromkeys(r for r in recent if isinstance(r, str) and r in ids))[:8] if isinstance(recent, list) else []
     cfg["config_version"] = CONFIG_VERSION
     return cfg
 
@@ -659,6 +677,7 @@ class App:
                 "network": network_status(),
                 "weather": self.cfg["weather"],
                 "units": self.cfg["units"],
+                "recent": self.cfg.get("recent", []),
                 "logos": logo_versions(self.cfg["services"]),
             }
 
@@ -673,6 +692,11 @@ class App:
             proc = spawn_browser(self.cfg, svc["profile"], svc["url"])
             self.current = (sid, proc)
             self._hotkey(True)
+            self.cfg["recent"] = ([sid] + [r for r in self.cfg.get("recent", []) if r != sid])[:8]
+            try:
+                save_config(self.cfg)
+            except OSError:
+                pass
         threading.Thread(target=self._watch, args=(proc,), daemon=True).start()
         return {"running": sid}
 
@@ -722,6 +746,8 @@ class App:
             raise ValueError("At least one valid app is required")
         with self.lock:
             self.cfg["services"] = services
+            keep = {svc["id"] for svc in services}
+            self.cfg["recent"] = [r for r in self.cfg.get("recent", []) if r in keep]
             save_config(self.cfg)
         threading.Thread(target=self.ensure_icons, daemon=True).start()
         return self.state()

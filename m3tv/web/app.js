@@ -2,8 +2,6 @@
 
 // Standard Material icon paths (24x24, Apache-2.0).
 const ICONS = {
-  edit: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
-  add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
   tune: "M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 14v2h8v-2h-8zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z",
   power: "M13 3h-2v10h2V3zm4.83 2.17-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z",
   del: "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
@@ -36,12 +34,18 @@ const SWATCH_HUES = [285, 255, 215, 185, 150, 95, 55, 25, 350, 320];
 
 const $ = (sel) => document.querySelector(sel);
 let state = {
-  services: [], logos: {}, hue: 285, scale: 1, running: null, browser: null,
+  services: [], logos: {}, recent: [], hue: 285, scale: 1, running: null, browser: null,
   network: null, weather: null, units: "auto", hotkey: null,
 };
-let editing = false;
+let tab = "home";        // "home" (For you) or "apps"
+let editing = false;     // only on the Apps tab
+let previewId = null;    // app shown in the hero while you point at it
+let previewTimer = null;
 let newHue = 285;
-let wx = null; // { temp, kind }
+let wx = null;           // { temp, kind }
+
+const byId = (id) => state.services.find((s) => s.id === id);
+const isEditing = () => editing && tab === "apps";
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -79,13 +83,16 @@ function snack(message) {
   snackTimer = setTimeout(() => { bar.hidden = true; }, 4000);
 }
 
-// ---------- header: greeting, clock, network, weather ----------
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? "Late night viewing" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
+function setAmbient(hue) { document.body.style.setProperty("--ah", hue); }
+
+// ---------- header: clock, network, weather ----------
 function tickClock() {
-  const now = new Date();
-  $("#clock").textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  $("#date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
-  const h = now.getHours();
-  $("#greeting").textContent = h < 5 ? "Late night viewing" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function renderNet() {
@@ -170,72 +177,159 @@ async function findPlace(query) {
   return { name: match.name + (match.admin1 ? ", " + match.admin1 : match.country ? ", " + match.country : ""), lat: match.latitude, lon: match.longitude };
 }
 
-// ---------- grid ----------
-function makeTile(svc) {
-  const tile = el("div", "tile");
-  tile.tabIndex = 0;
-  tile.setAttribute("role", "listitem");
-  tile.style.setProperty("--th", svc.hue);
-  tile.dataset.id = svc.id;
-
-  const logo = el("div", "logo");
-  const version = state.logos && state.logos[svc.id];
+// ---------- logos, cards, hero ----------
+function fillLogo(node, svc) {
+  node.replaceChildren();
+  node.classList.remove("fallback");
   const monogram = (svc.name[0] || "?").toUpperCase();
-  if (version) {
-    const img = document.createElement("img");
-    img.alt = "";
-    img.draggable = false;
-    img.addEventListener("error", () => { img.remove(); logo.classList.add("fallback"); logo.textContent = monogram; });
-    img.src = "/api/logo/" + svc.id + "?v=" + version;
-    logo.appendChild(img);
-  } else {
-    logo.classList.add("fallback");
-    logo.textContent = monogram;
-  }
-  tile.appendChild(logo);
+  const fallback = () => { node.replaceChildren(); node.classList.add("fallback"); node.textContent = monogram; };
+  const version = state.logos && state.logos[svc.id];
+  if (!version) { fallback(); return; }
+  const img = document.createElement("img");
+  img.alt = "";
+  img.draggable = false;
+  img.addEventListener("error", fallback);
+  img.src = "/api/logo/" + svc.id + "?v=" + version;
+  node.appendChild(img);
+}
 
-  const text = el("div");
-  text.appendChild(el("h3", null, svc.name));
-  if (svc.subtitle) text.appendChild(el("p", null, svc.subtitle));
-  tile.appendChild(text);
+function hostOf(url) {
+  try { return new URL(url).host.replace(/^www\./, ""); } catch (_) { return ""; }
+}
 
-  if (state.running === svc.id && !editing) tile.appendChild(el("span", "badge", "Open"));
+function preview(svc, delay) {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    setAmbient(svc.hue);
+    if (tab === "home" && !isEditing() && previewId !== svc.id) { previewId = svc.id; renderHero(true); }
+  }, delay);
+}
 
-  if (editing) {
+function makeCard(svc) {
+  const card = el("div", "card");
+  card.tabIndex = 0;
+  card.setAttribute("role", "listitem");
+  card.style.setProperty("--th", svc.hue);
+  card.dataset.id = svc.id;
+
+  const art = el("div", "art");
+  const plate = el("div", "plate");
+  fillLogo(plate, svc);
+  art.appendChild(plate);
+  if (state.running === svc.id && !isEditing()) art.appendChild(el("span", "badge", "Open"));
+
+  if (isEditing()) {
     const del = el("button", "del");
     del.setAttribute("aria-label", "Remove " + svc.name);
     del.appendChild(icon("del"));
     del.addEventListener("click", (ev) => { ev.stopPropagation(); removeService(svc.id); });
-    tile.appendChild(del);
-  } else {
+    art.appendChild(del);
+  }
+  card.appendChild(art);
+
+  const meta = el("div", "meta");
+  meta.appendChild(el("h3", null, svc.name));
+  if (svc.subtitle) meta.appendChild(el("p", null, svc.subtitle));
+  card.appendChild(meta);
+
+  card.addEventListener("focus", () => preview(svc, 0));
+  card.addEventListener("mouseenter", () => preview(svc, 260));
+  if (!isEditing()) {
     const open = () => launch(svc);
-    tile.addEventListener("click", open);
-    tile.addEventListener("keydown", (ev) => {
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); }
     });
   }
-  return tile;
+  return card;
+}
+
+function featured() {
+  return byId(previewId) || byId(state.running) || byId((state.recent || [])[0]) || state.services[0];
+}
+
+function renderHero(swap) {
+  const svc = featured();
+  if (!svc) return;
+  const hero = $("#hero");
+  const running = state.running === svc.id;
+  const runSvc = byId(state.running);
+
+  $("#hero-eyebrow").textContent = running ? "Open now"
+    : previewId ? (svc.group || "App")
+    : (state.recent && state.recent.length ? "Pick up where you left off" : greeting());
+  $("#hero-title").textContent = svc.name;
+  $("#hero-sub").textContent = running
+    ? (state.hotkey ? "Press " + state.hotkey + " to come back here." : "Run “m3tv home” (bind it to a key) to come back here.")
+    : (svc.subtitle || hostOf(svc.url));
+
+  const open = $("#hero-open");
+  open.hidden = running;
+  open.textContent = "Open " + svc.name;
+  open.onclick = () => launch(svc);
+
+  const home = $("#hero-home");
+  home.hidden = !runSvc;
+  home.textContent = running ? "Close and go home" : runSvc ? "Close " + runSvc.name : "";
+
+  fillLogo($("#hero-art"), svc);
+  hero.style.setProperty("--th", svc.hue);
+  setAmbient(svc.hue);
+  if (swap) {
+    hero.classList.remove("swap");
+    void hero.offsetWidth;
+    hero.classList.add("swap");
+  }
+}
+
+function renderRows() {
+  const rows = $("#rows");
+  rows.replaceChildren();
+  const section = (title, list) => {
+    if (!list.length) return;
+    const rail = el("div", "rail");
+    rail.setAttribute("role", "list");
+    list.forEach((svc) => rail.appendChild(makeCard(svc)));
+    rows.append(el("h2", "row-title", title), rail);
+  };
+  section("Recently opened", (state.recent || []).map(byId).filter(Boolean));
+  const groups = new Map();
+  state.services.forEach((svc) => {
+    const name = svc.group || "Your apps";
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(svc);
+  });
+  groups.forEach((list, name) => section(name, list));
+}
+
+function renderApps() {
+  $("#grid").replaceChildren(...state.services.map(makeCard));
+  $("#apps-title").textContent = isEditing() ? "Tap the bin to remove an app" : "All apps";
+  $("#btn-edit").textContent = isEditing() ? "Done" : "Edit";
 }
 
 function render() {
   document.documentElement.style.setProperty("--h", state.hue);
-  $("#grid").replaceChildren(...state.services.map(makeTile));
-  document.body.classList.toggle("editing", editing);
-  $("#btn-edit").classList.toggle("on", editing);
-  $("#section-title").textContent = editing ? "Tap the bin to remove an app" : "Apps";
-  const running = state.services.find((s) => s.id === state.running);
-  $("#now").hidden = !running;
-  if (running) {
-    $("#now-name").textContent = running.name;
-    $("#now-hint").textContent = state.hotkey
-      ? "Press " + state.hotkey + " to come back here."
-      : "Run “m3tv home” (bind it to a key) to come back here.";
-  }
+  $("#view-home").hidden = tab !== "home";
+  $("#view-apps").hidden = tab !== "apps";
+  $("#tab-home").setAttribute("aria-selected", String(tab === "home"));
+  $("#tab-apps").setAttribute("aria-selected", String(tab === "apps"));
+  document.body.classList.toggle("editing", isEditing());
+  if (tab === "home") { renderHero(false); renderRows(); } else { renderApps(); }
   renderNet();
   renderWeather();
 }
 
-const gridKey = (s) => JSON.stringify([s.services, s.running, s.hue, s.logos, s.hotkey]);
+function setTab(name) {
+  tab = name;
+  editing = false;
+  previewId = null;
+  clearTimeout(previewTimer);
+  if (name === "apps") setAmbient(state.hue);
+  render();
+}
+
+const gridKey = (s) => JSON.stringify([s.services, s.running, s.hue, s.logos, s.hotkey, s.recent]);
 const weatherKey = (s) => JSON.stringify([s.weather, s.units]);
 
 async function refresh() {
@@ -254,11 +348,17 @@ async function launch(svc) {
   snack("Opening " + svc.name + "…");
   try {
     await api("/api/launch", { id: svc.id });
+    previewId = null;
     state.running = svc.id;
+    state.recent = [svc.id, ...(state.recent || []).filter((r) => r !== svc.id)].slice(0, 8);
     render();
   } catch (err) {
     snack(err.message);
   }
+}
+
+async function goHome() {
+  try { await api("/api/home", {}); previewId = null; state.running = null; render(); } catch (err) { snack(err.message); }
 }
 
 async function saveServices(list) {
@@ -343,11 +443,11 @@ async function setWeather() {
 }
 
 // ---------- wiring ----------
-$("#btn-edit").append(icon("edit"));
-$("#btn-add").append(icon("add"));
 $("#btn-settings").append(icon("tune"));
 $("#btn-quit").append(icon("power"));
 
+$("#tab-home").addEventListener("click", () => setTab("home"));
+$("#tab-apps").addEventListener("click", () => setTab("apps"));
 $("#btn-edit").addEventListener("click", () => { editing = !editing; render(); });
 $("#btn-add").addEventListener("click", openAdd);
 $("#btn-settings").addEventListener("click", openSettings);
@@ -355,9 +455,7 @@ $("#weather").addEventListener("click", openSettings);
 $("#btn-quit").addEventListener("click", async () => {
   try { await api("/api/quit", {}); } catch (_) { /* window is closing */ }
 });
-$("#btn-home").addEventListener("click", async () => {
-  try { await api("/api/home", {}); state.running = null; render(); } catch (err) { snack(err.message); }
-});
+$("#hero-home").addEventListener("click", goHome);
 
 $("#btn-settings-close").addEventListener("click", () => { $("#dlg-settings").close(); });
 $("#dlg-settings").addEventListener("close", render);
@@ -402,9 +500,13 @@ window.addEventListener("offline", renderNet);
 document.addEventListener("keydown", (ev) => {
   const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
   if (!dir || document.querySelector("dialog[open]")) return;
-  const items = [...document.querySelectorAll(".tile, .icon-btn, .btn, .chip#weather")].filter((n) => n.offsetParent !== null);
+  const items = [...document.querySelectorAll(".card, .tab, .icon-btn, .btn, #weather")].filter((n) => n.offsetParent !== null);
   const current = document.activeElement;
-  if (!items.includes(current)) { if (items[0]) { items[0].focus(); ev.preventDefault(); } return; }
+  if (!items.includes(current)) {
+    const first = document.querySelector("#hero-open:not([hidden])") || document.querySelector(".card") || items[0];
+    if (first) { first.focus(); ev.preventDefault(); }
+    return;
+  }
   const c = current.getBoundingClientRect();
   const cx = c.left + c.width / 2, cy = c.top + c.height / 2;
   let best = null, bestScore = Infinity;
@@ -415,14 +517,15 @@ document.addEventListener("keydown", (ev) => {
     const along = dx * dir[0] + dy * dir[1];
     if (along <= 4) return;
     const across = Math.abs(dir[0] ? dy : dx);
+    if (dir[0] && across > c.height * 0.6) return; // left/right stays in the same row
     const score = along + across * 2.2;
     if (score < bestScore) { bestScore = score; best = n; }
   });
-  if (best) { best.focus(); best.scrollIntoView({ block: "nearest" }); ev.preventDefault(); }
+  if (best) { best.focus({ preventScroll: true }); best.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" }); ev.preventDefault(); }
 });
 
 tickClock();
 setInterval(tickClock, 15000);
-refresh();
+refresh().then(() => render());
 setInterval(refresh, 2000);
 setInterval(loadWeather, 15 * 60 * 1000);

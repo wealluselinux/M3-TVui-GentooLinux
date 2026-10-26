@@ -1,6 +1,6 @@
 # M3 TV UI
 
-A Material You (Material Design 3) launcher made for TVs and mouse control. Big tiles for YouTube, Netflix, Disney+ and more, with a status bar showing weather, network and the time. Click a tile and the service opens full screen in Firefox.
+A Material You (Material Design 3) launcher made for TVs and mouse control, laid out like a modern TV home screen: a big banner for the app you are pointing at, rows of landscape cards (YouTube, Netflix, Disney+ and more), and a status bar with weather, network and the time. Click a card and the service opens full screen in Firefox.
 
 It works on any Linux distro. Gentoo is the primary target and has the most detailed steps below.
 
@@ -67,9 +67,24 @@ Flags: `--no-deps` (skip package installs), `--uninstall`.
 
 In the launcher:
 
-- Click a tile to open it. Arrow keys and Enter work too (handy with a remote or keyboard).
-- The top bar shows the **weather**, **network** (Wi-Fi bars, a wired icon, or a slashed icon when you are offline) and the **time**. The buttons in the top-right corner edit tiles, add an app, open **Settings** and exit.
+- **For you** is the home screen. The banner shows the app you are pointing at (or the one you opened last), the page colour glides to match it, and rows underneath hold **Recently opened** plus your apps in groups.
+- **Apps** lists everything in a grid, with **Edit** (remove apps) and **Add app**.
+- Click a card to open it. Arrow keys and Enter work too (handy with a remote or keyboard).
+- The top bar shows the **weather**, **network** (Wi-Fi bars, a wired icon, or a slashed icon when you are offline) and the **time**. The buttons in the top-right corner open **Settings** and exit.
+- Your own apps join the **Your apps** row. Set `"group"` on an app in the config to put it in a row of its own.
 - **Settings** has the theme colour, weather location, temperature unit, TV scale and the sign-in mode. For weather, type a city such as `Detroit, Michigan` and press Set. Weather comes from [Open-Meteo](https://open-meteo.com), which needs no account.
+
+### Updating, reinstalling, uninstalling
+
+Three scripts live next to `install.sh`:
+
+| Script | What it does |
+| --- | --- |
+| `./update.sh` | Pulls the newest version from GitHub and installs it. Shows what changed. Your settings and logins are kept. `--force` reinstalls even if you are current, `--restart` reopens the launcher afterwards. |
+| `./reinstall.sh` | Removes M3 TV and installs it again from this folder. `--clean` also resets your settings, cached logos and helper profiles. |
+| `./uninstall.sh` | Removes M3 TV and its menu entry. `--purge` also deletes settings, cached logos and helper profiles (it asks first, or pass `--yes`). |
+
+You can run `update.sh` from your clone of the repo. If the clone was deleted, `update.sh` downloads a fresh copy into `~/.local/share/m3-tvui/src`. Your regular Firefox profile is never touched by any of them. If `update.sh` says your clone has local changes, run `git stash` inside the clone and try again.
 
 ### Ctrl+X: back to the launcher
 
@@ -105,6 +120,7 @@ Settings live in `~/.config/m3-tvui/config.json` (`m3tv config-path` prints the 
   "firefox_profile": null,
   "weather": {"name": "Detroit, Michigan", "lat": 42.33, "lon": -83.05},
   "units": "auto",
+  "recent": [],
   "services": []
 }
 ```
@@ -123,6 +139,9 @@ The server only listens on `127.0.0.1`. Every action needs a custom header, a ma
 
 ```
 install.sh          multi-distro installer, adds the app menu entry
+update.sh           update from GitHub
+reinstall.sh        remove and install again (--clean to reset settings)
+uninstall.sh        remove everything (--purge to include settings)
 m3tv/m3tv.py        launcher, local server, hotkey and CLI
 m3tv/icon.svg       app menu icon
 m3tv/web/           the Material 3 interface (HTML, CSS, JS)

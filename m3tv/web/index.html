@@ -10,9 +10,9 @@
   <div class="backdrop" aria-hidden="true"></div>
 
   <header class="top">
-    <div class="hello">
-      <p class="label" id="date"></p>
-      <h1 id="greeting">Welcome</h1>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-home" aria-selected="true">For you</button>
+      <button class="tab" role="tab" id="tab-apps" aria-selected="false">Apps</button>
     </div>
 
     <div class="status" aria-label="Status">
@@ -22,25 +22,37 @@
     </div>
 
     <nav class="actions" aria-label="Launcher actions">
-      <button class="icon-btn" id="btn-edit" aria-label="Edit apps" title="Edit apps"></button>
-      <button class="icon-btn" id="btn-add" aria-label="Add app" title="Add app"></button>
       <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings"></button>
       <button class="icon-btn" id="btn-quit" aria-label="Exit launcher" title="Exit launcher"></button>
     </nav>
   </header>
 
   <main>
-    <section class="now" id="now" hidden>
-      <div class="now-text">
-        <p class="label">Open now</p>
-        <h2 id="now-name"></h2>
-        <p class="body" id="now-hint"></p>
-      </div>
-      <button class="btn filled" id="btn-home">Close and go home</button>
+    <section id="view-home">
+      <section class="hero" id="hero">
+        <div class="hero-text">
+          <p class="eyebrow" id="hero-eyebrow"></p>
+          <h1 id="hero-title"></h1>
+          <p class="hero-sub" id="hero-sub"></p>
+          <div class="hero-actions">
+            <button class="btn filled" id="hero-open"></button>
+            <button class="btn tonal" id="hero-home" hidden>Close and go home</button>
+          </div>
+        </div>
+        <div class="hero-art" id="hero-art" aria-hidden="true"></div>
+      </section>
+      <div id="rows"></div>
     </section>
 
-    <h2 class="section-title" id="section-title">Apps</h2>
-    <div class="grid" id="grid" role="list"></div>
+    <section id="view-apps" hidden>
+      <div class="apps-bar">
+        <h2 id="apps-title">All apps</h2>
+        <span class="spacer"></span>
+        <button class="btn tonal" id="btn-edit">Edit</button>
+        <button class="btn filled" id="btn-add">Add app</button>
+      </div>
+      <div class="grid" id="grid" role="list"></div>
+    </section>
   </main>
 
   <dialog id="dlg-settings">

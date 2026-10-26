@@ -29,11 +29,7 @@ say()  { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 
 if [ "$UNINSTALL" -eq 1 ]; then
-  say "Removing m3tv"
-  rm -rf "$APP_DIR"
-  rm -f "$BIN_DIR/m3tv" "$DESKTOP_DIR/m3-tvui.desktop"
-  say "Done. Config (~/.config/m3-tvui) and browser profiles (~/.local/share/m3-tvui/profiles) were kept."
-  exit 0
+  exec "$SRC_DIR/uninstall.sh" --yes
 fi
 
 # ---- detect distro ----------------------------------------------------------
@@ -135,10 +131,14 @@ fi
 
 # ---- install m3tv -----------------------------------------------------------
 say "Installing m3tv to $APP_DIR"
+# Stop a running launcher so its files can be replaced.
+if [ -x "$BIN_DIR/m3tv" ]; then "$BIN_DIR/m3tv" quit >/dev/null 2>&1 || true; fi
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR" "$BIN_DIR" "$DESKTOP_DIR"
 cp -r "$SRC_DIR/m3tv/." "$APP_DIR/"
 chmod +x "$APP_DIR/m3tv.py"
+# Remember where this source folder is, so update.sh can find it later.
+printf '%s\n' "$SRC_DIR" > "$DATA_HOME/m3-tvui/source"
 
 cat > "$BIN_DIR/m3tv" <<EOF
 #!/bin/sh
@@ -187,6 +187,7 @@ esac
 say "Installed. Running a quick check:"
 python3 "$APP_DIR/m3tv.py" doctor || true
 
+if [ -z "${M3TV_QUIET:-}" ]; then
 cat <<'EOF'
 
 Next steps
@@ -197,4 +198,6 @@ Next steps
   3. Start it on login, for example in hyprland.conf:   exec-once = m3tv
   4. Close your regular Firefox before opening an app, so m3tv can use your
      Firefox profile (that is what keeps you signed in).
+  5. Later:  ./update.sh   ./reinstall.sh   ./uninstall.sh
 EOF
+fi
