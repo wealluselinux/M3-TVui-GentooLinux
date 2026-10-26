@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M3 TV</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"></div>
+
+  <header class="top">
+    <div class="hello">
+      <p class="label" id="date"></p>
+      <h1 id="greeting">Welcome</h1>
+    </div>
+    <div class="clock" id="clock" aria-live="off"></div>
+    <nav class="actions" aria-label="Launcher actions">
+      <button class="icon-btn" id="btn-edit" aria-label="Edit apps" title="Edit apps"></button>
+      <button class="icon-btn" id="btn-add" aria-label="Add app" title="Add app"></button>
+      <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings"></button>
+      <button class="icon-btn" id="btn-quit" aria-label="Exit launcher" title="Exit launcher"></button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="now" id="now" hidden>
+      <div class="now-text">
+        <p class="label">Open now</p>
+        <h2 id="now-name"></h2>
+        <p class="body">Press your mouse side button or run <code>m3tv home</code> to come back here.</p>
+      </div>
+      <button class="btn filled" id="btn-home">Close and go home</button>
+    </section>
+
+    <h2 class="section-title" id="section-title">Apps</h2>
+    <div class="grid" id="grid" role="list"></div>
+  </main>
+
+  <dialog id="dlg-settings">
+    <h2>Settings</h2>
+    <p class="label">Theme colour</p>
+    <div class="swatches" id="swatches"></div>
+    <label class="field">
+      <span class="label">TV scale (restart the launcher to apply)</span>
+      <select id="scale">
+        <option value="1">Automatic</option>
+        <option value="1.25">125%</option>
+        <option value="1.5">150%</option>
+        <option value="1.75">175%</option>
+        <option value="2">200%</option>
+        <option value="2.5">250%</option>
+      </select>
+    </label>
+    <p class="body" id="browser-info"></p>
+    <div class="dialog-actions">
+      <button class="btn text" id="btn-reset">Reset apps</button>
+      <span class="spacer"></span>
+      <button class="btn filled" id="btn-settings-close">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-add">
+    <form id="form-add" method="dialog">
+      <h2>Add an app</h2>
+      <label class="field">
+        <span class="label">Name</span>
+        <input id="add-name" required maxlength="40" autocomplete="off" placeholder="Crunchyroll">
+      </label>
+      <label class="field">
+        <span class="label">Website</span>
+        <input id="add-url" required autocomplete="off" placeholder="www.example.com">
+      </label>
+      <p class="label">Colour</p>
+      <div class="swatches" id="add-swatches"></div>
+      <label class="check">
+        <input type="checkbox" id="add-tv">
+        <span>Ask for the TV version of the site (experimental)</span>
+      </label>
+      <div class="dialog-actions">
+        <button class="btn text" type="button" id="btn-add-cancel">Cancel</button>
+        <span class="spacer"></span>
+        <button class="btn filled" type="submit">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="snack" id="snack" role="status" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>
