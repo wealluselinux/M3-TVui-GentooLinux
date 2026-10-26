@@ -146,16 +146,38 @@ exec python3 "$APP_DIR/m3tv.py" "\$@"
 EOF
 chmod +x "$BIN_DIR/m3tv"
 
+ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
+mkdir -p "$ICON_DIR"
+cp "$SRC_DIR/m3tv/icon.svg" "$ICON_DIR/m3-tvui.svg"
+
 cat > "$DESKTOP_DIR/m3-tvui.desktop" <<EOF
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=M3 TV
-Comment=Material You TV launcher
+GenericName=TV launcher
+Comment=Material You TV launcher for YouTube, Netflix, Disney+ and more
 Exec=$BIN_DIR/m3tv
-Icon=video-television
-Categories=AudioVideo;Video;
+Icon=m3-tvui
+Categories=AudioVideo;Video;Player;
+Keywords=tv;television;youtube;netflix;disney;streaming;
+StartupNotify=false
 Terminal=false
+Actions=Home;Quit;
+
+[Desktop Action Home]
+Name=Go back to the launcher
+Exec=$BIN_DIR/m3tv home
+
+[Desktop Action Quit]
+Name=Close M3 TV
+Exec=$BIN_DIR/m3tv quit
 EOF
+
+# Make app menus pick it up right away (all optional).
+if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true; fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -t "$DATA_HOME/icons/hicolor" 2>/dev/null || true; fi
+if command -v kbuildsycoca6 >/dev/null 2>&1; then kbuildsycoca6 >/dev/null 2>&1 || true; fi
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -168,11 +190,11 @@ python3 "$APP_DIR/m3tv.py" doctor || true
 cat <<'EOF'
 
 Next steps
-  1. Start it:            m3tv
-  2. Come back from an app (bind this to a key or mouse side button):   m3tv home
-  3. Hyprland example, add to hyprland.conf:
-         exec-once = m3tv
-         bind = , mouse:275, exec, m3tv home
-         bind = SUPER, Escape, exec, m3tv home
-  See README.md for sway, KDE and GNOME.
+  1. Start it:            m3tv      (or open "M3 TV" from your app menu)
+  2. Press Ctrl+X to come back from an app. Hyprland and sway set this up
+     automatically while an app is open. On KDE or GNOME, bind "m3tv home"
+     to Ctrl+X yourself (see README.md).
+  3. Start it on login, for example in hyprland.conf:   exec-once = m3tv
+  4. Close your regular Firefox before opening an app, so m3tv can use your
+     Firefox profile (that is what keeps you signed in).
 EOF

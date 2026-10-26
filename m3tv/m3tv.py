@@ -10,6 +10,7 @@ Only the Python standard library is used.
 from __future__ import annotations
 
 import argparse
+import configparser
 import json
 import os
 import re
@@ -19,13 +20,14 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 APP_DIR = Path(__file__).resolve().parent
 WEB_DIR = APP_DIR / "web"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "m3-tvui"
@@ -35,6 +37,8 @@ DATA_DIR = Path(
 )
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_PORT = 8787
+CONFIG_VERSION = 2
+DEFAULT_HOTKEY = "ctrl+x"
 
 # Smart-TV user agent so youtube.com/tv serves the TV ("Leanback") interface.
 TV_UA = (
@@ -46,7 +50,6 @@ BROWSER_CANDIDATES = ["firefox", "firefox-bin", "firefox-esr", "librewolf"]
 
 DEFAULT_SERVICES = [
     {"id": "youtube", "name": "YouTube", "subtitle": "Made for TVs", "url": "https://www.youtube.com/tv", "hue": 25, "profile": "tv"},
-    {"id": "youtube-classic", "name": "YouTube Classic", "subtitle": "Regular website", "url": "https://www.youtube.com", "hue": 35, "profile": "web"},
     {"id": "youtube-tv", "name": "YouTube TV", "subtitle": "Live TV subscription", "url": "https://tv.youtube.com", "hue": 15, "profile": "web"},
     {"id": "netflix", "name": "Netflix", "subtitle": "Movies and series", "url": "https://www.netflix.com", "hue": 20, "profile": "web"},
     {"id": "disney", "name": "Disney+", "subtitle": "Stories for everyone", "url": "https://www.disneyplus.com", "hue": 260, "profile": "web"},
@@ -121,12 +124,42 @@ def clean_services(items):
     return out
 
 
+def clean_weather(raw):
+    """Validate a saved weather location: {"name", "lat", "lon"} or None."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        lat = float(raw["lat"])
+        lon = float(raw["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return {"name": str(raw.get("name", "")).strip()[:60], "lat": round(lat, 4), "lon": round(lon, 4)}
+
+
 def load_config() -> dict:
-    cfg = {"port": DEFAULT_PORT, "hue": 285, "scale": 1.0, "browser": None, "services": DEFAULT_SERVICES}
+    cfg = {
+        "port": DEFAULT_PORT,
+        "hue": 285,
+        "scale": 1.0,
+        "browser": None,
+        "home_hotkey": DEFAULT_HOTKEY,
+        "profile_mode": "firefox",
+        "firefox_profile": None,
+        "weather": None,
+        "units": "auto",
+        "services": DEFAULT_SERVICES,
+    }
     try:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
+    # Old config files have no version; new installs start at the current one.
+    try:
+        version = int(data.get("config_version", 1)) if isinstance(data, dict) and data else CONFIG_VERSION
+    except (TypeError, ValueError):
+        version = 1
     if isinstance(data, dict):
         for key in cfg:
             if key in data:
@@ -143,7 +176,16 @@ def load_config() -> dict:
         cfg["scale"] = min(3.0, max(0.75, float(cfg["scale"])))
     except (TypeError, ValueError):
         cfg["scale"] = 1.0
-    cfg["services"] = clean_services(cfg["services"]) or clean_services(DEFAULT_SERVICES)
+    if cfg["profile_mode"] not in ("firefox", "separate"):
+        cfg["profile_mode"] = "firefox"
+    cfg["weather"] = clean_weather(cfg["weather"])
+    if cfg["units"] not in ("auto", "f", "c"):
+        cfg["units"] = "auto"
+    cfg["services"] = clean_services(cfg["services"])
+    if version < 2:  # the YouTube Classic tile was removed in config version 2
+        cfg["services"] = [s for s in cfg["services"] if s["id"] != "youtube-classic"]
+    cfg["services"] = cfg["services"] or clean_services(DEFAULT_SERVICES)
+    cfg["config_version"] = CONFIG_VERSION
     return cfg
 
 
@@ -202,13 +244,77 @@ def write_user_js(profile_dir: Path, kind: str, cfg: dict) -> None:
     (profile_dir / "user.js").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def find_login_profile(cfg: dict):
+    """Find the user's everyday Firefox profile (the one with their logins)."""
+    custom = cfg.get("firefox_profile")
+    if custom:
+        path = Path(str(custom)).expanduser()
+        return path if path.is_dir() else None
+    home = Path.home()
+    roots = [
+        home / ".mozilla" / "firefox",
+        home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+        home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+    ]
+    for root in roots:
+        ini = root / "profiles.ini"
+        if not ini.is_file():
+            continue
+        parser = configparser.RawConfigParser()
+        parser.optionxform = str
+        try:
+            parser.read(ini, encoding="utf-8")
+        except configparser.Error:
+            continue
+        for sec in parser.sections():  # Firefox 67+: the install's default profile
+            if sec.startswith("Install") and parser.has_option(sec, "Default"):
+                path = root / parser.get(sec, "Default")
+                if path.is_dir():
+                    return path
+        for sec in parser.sections():  # older style: Default=1
+            if sec.startswith("Profile") and parser.get(sec, "Default", fallback="0") == "1":
+                raw = parser.get(sec, "Path", fallback="")
+                path = root / raw if parser.get(sec, "IsRelative", fallback="1") == "1" else Path(raw)
+                if raw and path.is_dir():
+                    return path
+    return None
+
+
+def profile_in_use(profile: Path) -> bool:
+    """True if a running Firefox currently holds this profile's lock."""
+    try:
+        target = os.readlink(profile / "lock")
+    except OSError:
+        return False
+    match = re.search(r"\+(\d+)$", target)
+    if not match:
+        return False
+    try:
+        os.kill(int(match.group(1)), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def spawn_browser(cfg: dict, kind: str, url: str) -> subprocess.Popen:
     cmd = find_browser(cfg)
     if not cmd:
         raise RuntimeError("Firefox was not found. Install it, or set \"browser\" in " + str(CONFIG_FILE))
-    profile_dir = DATA_DIR / "profiles" / kind
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    write_user_js(profile_dir, kind, cfg)
+    login = find_login_profile(cfg) if kind in ("web", "tv") and cfg.get("profile_mode") != "separate" else None
+    if login is not None and profile_in_use(login):
+        raise RuntimeError("Your regular Firefox is open and using your profile. Close it, then try again.")
+    if kind == "web" and login is not None:
+        # Your own profile: sign-ins, cookies and extensions come along. We do not touch its settings.
+        profile_dir = login
+    else:
+        profile_dir = DATA_DIR / "profiles" / kind
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        write_user_js(profile_dir, kind, cfg)
+        if login is not None:
+            # The YouTube TV profile needs its own smart-TV user agent, so it gets a copy of your sign-ins.
+            sync_login_data(login, profile_dir)
     env = os.environ.copy()
     env.setdefault("MOZ_ENABLE_WAYLAND", "1")
     return subprocess.Popen(
@@ -238,6 +344,265 @@ def stop_proc(proc) -> None:
 
 
 # --------------------------------------------------------------------------
+# Logos, network status and sign-in data
+# --------------------------------------------------------------------------
+
+LOGO_EXT = {
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".ico": "image/x-icon",
+}
+BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+LOGO_RETRY_SECONDS = 7 * 24 * 3600
+LOGIN_FILES = ["cookies.sqlite", "cookies.sqlite-wal", "key4.db", "logins.json"]
+
+
+def find_logo(sid: str):
+    """Your own file in ~/.config/m3-tvui/logos/<id>.png wins over the cached site icon."""
+    if not SLUG_RE.match(sid):
+        return None
+    for folder in (CONFIG_DIR / "logos", DATA_DIR / "icons"):
+        for ext in LOGO_EXT:
+            path = folder / (sid + ext)
+            if path.is_file():
+                return path
+    return None
+
+
+def logo_versions(services) -> dict:
+    out = {}
+    for svc in services:
+        path = find_logo(svc["id"])
+        if path:
+            try:
+                out[svc["id"]] = int(path.stat().st_mtime)
+            except OSError:
+                pass
+    return out
+
+
+def sniff_image(data: bytes):
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:4] == b"\x00\x00\x01\x00":
+        return ".ico"
+    return None
+
+
+def _http_get(url: str, limit: int, truncate: bool = False):
+    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA, "Accept": "*/*"})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = resp.read(limit + 1)
+        final = resp.geturl()
+    if len(data) > limit:
+        if not truncate:
+            raise ValueError("too large")
+        data = data[:limit]
+    return data, final
+
+
+LINK_TAG_RE = re.compile(r"<link\b[^>]*>", re.I)
+ATTR_RE = re.compile(r"""([a-zA-Z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+
+
+def icon_candidates(page_url: str, html: str) -> list:
+    found = []
+    for tag in LINK_TAG_RE.findall(html):
+        attrs = {m.group(1).lower(): (m.group(2) if m.group(2) is not None else m.group(3)) for m in ATTR_RE.finditer(tag)}
+        rel = attrs.get("rel", "").lower()
+        href = attrs.get("href")
+        if not href or "icon" not in rel or "mask-icon" in rel:
+            continue
+        size_match = re.match(r"(\d+)x\d+", attrs.get("sizes", ""))
+        size = int(size_match.group(1)) if size_match else 0
+        url = urljoin(page_url, href)
+        if urlparse(url).scheme in ("http", "https"):
+            found.append(((2 if "apple-touch-icon" in rel else 1, size), url))
+    found.sort(key=lambda item: item[0], reverse=True)
+    return [url for _, url in found]
+
+
+def fetch_site_icon(svc: dict) -> bool:
+    """Download the site's own icon (apple-touch-icon or favicon) into the cache. Best effort."""
+    icons = DATA_DIR / "icons"
+    icons.mkdir(parents=True, exist_ok=True)
+    parsed = urlparse(svc["url"])
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    urls = []
+    try:
+        html, final = _http_get(svc["url"], 300_000, truncate=True)
+        urls += icon_candidates(final, html.decode("utf-8", "replace"))
+    except Exception:
+        pass
+    urls += [base + "/apple-touch-icon.png", base + "/favicon.ico"]
+    seen = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            data, _ = _http_get(url, 400_000)
+        except Exception:
+            continue
+        ext = sniff_image(data)
+        if ext and len(data) > 200:
+            (icons / (svc["id"] + ext)).write_bytes(data)
+            try:
+                (icons / (svc["id"] + ".none")).unlink()
+            except OSError:
+                pass
+            return True
+    try:
+        (icons / (svc["id"] + ".none")).write_text("")
+    except OSError:
+        pass
+    return False
+
+
+def sync_login_data(src: Path, dst: Path) -> None:
+    """Copy sign-in data (cookies, saved logins) from your Firefox profile into a helper profile."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in ("cookies.sqlite", "cookies.sqlite-wal", "cookies.sqlite-shm"):
+        try:
+            (dst / name).unlink()
+        except OSError:
+            pass
+    for name in LOGIN_FILES:
+        try:
+            if (src / name).is_file():
+                shutil.copy2(src / name, dst / name)
+        except OSError:
+            pass
+
+
+_net_cache = (0.0, None)
+
+
+def _ssid():
+    for args in (["iwgetid", "-r"], ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"]):
+        if not shutil.which(args[0]):
+            continue
+        try:
+            out = subprocess.run(args, capture_output=True, text=True, timeout=1.5).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in out.splitlines():
+            line = line.strip()
+            if args[0] == "nmcli":
+                if line.startswith("yes:"):
+                    return line[4:] or None
+            elif line:
+                return line
+    return None
+
+
+def network_status() -> dict:
+    """What the Wi-Fi icon shows: ethernet, wifi (with 1-3 bars) or none. Cached for a few seconds."""
+    global _net_cache
+    now = time.monotonic()
+    if _net_cache[1] is not None and now - _net_cache[0] < 4:
+        return _net_cache[1]
+    status = {"type": "none", "level": 0, "ssid": None}
+    quality = {}
+    try:
+        for line in Path("/proc/net/wireless").read_text().splitlines()[2:]:
+            iface, _, rest = line.partition(":")
+            fields = rest.split()
+            if len(fields) >= 3:
+                quality[iface.strip()] = float(fields[1].rstrip("."))
+    except (OSError, ValueError):
+        pass
+    wifi = None
+    try:
+        for dev in sorted(Path("/sys/class/net").iterdir()):
+            if dev.name == "lo" or not (dev / "device").exists():  # skip virtual interfaces
+                continue
+            try:
+                if (dev / "operstate").read_text().strip() != "up":
+                    continue
+            except OSError:
+                continue
+            if (dev / "wireless").exists():
+                q = quality.get(dev.name, 0.0)  # out of 70
+                wifi = {"type": "wifi", "level": 3 if q >= 47 else 2 if q >= 28 else 1, "ssid": None}
+            else:
+                status = {"type": "ethernet", "level": 3, "ssid": None}
+                break
+        else:
+            if wifi:
+                wifi["ssid"] = _ssid()
+                status = wifi
+    except OSError:
+        pass
+    _net_cache = (now, status)
+    return status
+
+
+# --------------------------------------------------------------------------
+# Home hotkey
+#
+# A kiosk Firefox window swallows keys, so the hotkey is registered with the
+# compositor while an app is open and removed again when you are back home.
+# Hyprland and sway are supported. Elsewhere, bind `m3tv home` yourself.
+# --------------------------------------------------------------------------
+
+HYPR_MODS = {"ctrl": "CTRL", "control": "CTRL", "alt": "ALT", "shift": "SHIFT", "super": "SUPER", "win": "SUPER", "mod": "SUPER"}
+
+
+def parse_hotkey(spec):
+    parts = [p.strip().lower() for p in str(spec or "").split("+") if p.strip()]
+    if not parts or not all(re.fullmatch(r"[a-z0-9_]+", p) for p in parts):
+        return None
+    return parts[:-1], parts[-1]
+
+
+def hotkey_label(spec) -> str:
+    parsed = parse_hotkey(spec)
+    return "+".join(p.capitalize() for p in (parsed[0] + [parsed[1]])) if parsed else ""
+
+
+def detect_compositor():
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        return "hyprland"
+    if os.environ.get("SWAYSOCK") and shutil.which("swaymsg"):
+        return "sway"
+    return None
+
+
+def home_command() -> str:
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} home"
+
+
+def set_hotkey(spec, enable: bool) -> bool:
+    """Register or remove the global 'go home' hotkey. Returns True on success."""
+    parsed = parse_hotkey(spec)
+    comp = detect_compositor()
+    if not parsed or not comp:
+        return False
+    mods, key = parsed
+    try:
+        if comp == "hyprland":
+            combo = ",".join(["+".join(HYPR_MODS.get(m, m.upper()) for m in mods).replace("+", " "), key.upper() if len(key) == 1 else key])
+            args = ["hyprctl", "keyword", "bind" if enable else "unbind", combo + (",exec," + home_command() if enable else "")]
+        else:
+            combo = "+".join(mods + [key])
+            args = ["swaymsg", "bindsym", combo, "exec", home_command()] if enable else ["swaymsg", "unbindsym", combo]
+        result = subprocess.run(args, capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    return comp != "hyprland" or result.stdout.strip().startswith("ok")
+
+
+# --------------------------------------------------------------------------
 # Application state
 # --------------------------------------------------------------------------
 
@@ -247,7 +612,30 @@ class App:
         self.lock = threading.RLock()
         self.current = None  # (service_id, Popen)
         self.launcher = None
+        self.hotkey_on = False
         self.stop_event = threading.Event()
+
+    def _hotkey(self, enable: bool) -> None:
+        if enable == self.hotkey_on:
+            return
+        if set_hotkey(self.cfg.get("home_hotkey"), enable):
+            self.hotkey_on = enable
+        elif not enable:
+            self.hotkey_on = False
+
+    def ensure_icons(self) -> None:
+        with self.lock:
+            services = list(self.cfg["services"])
+        for svc in services:
+            if find_logo(svc["id"]):
+                continue
+            marker = DATA_DIR / "icons" / (svc["id"] + ".none")
+            try:
+                if marker.exists() and time.time() - marker.stat().st_mtime < LOGO_RETRY_SECONDS:
+                    continue
+            except OSError:
+                pass
+            fetch_site_icon(svc)
 
     @property
     def port(self) -> int:
@@ -257,6 +645,7 @@ class App:
         with self.lock:
             running = self.current[0] if self.current and self.current[1].poll() is None else None
             cmd = find_browser(self.cfg)
+            login = find_login_profile(self.cfg)
             return {
                 "version": VERSION,
                 "services": self.cfg["services"],
@@ -264,6 +653,13 @@ class App:
                 "scale": self.cfg["scale"],
                 "running": running,
                 "browser": Path(cmd[0]).name if cmd else None,
+                "hotkey": hotkey_label(self.cfg.get("home_hotkey")) if self.hotkey_on else None,
+                "profile_mode": self.cfg["profile_mode"],
+                "login_profile": login.name.split(".", 1)[-1] if login else None,
+                "network": network_status(),
+                "weather": self.cfg["weather"],
+                "units": self.cfg["units"],
+                "logos": logo_versions(self.cfg["services"]),
             }
 
     def launch(self, sid: str) -> dict:
@@ -276,6 +672,7 @@ class App:
                 self.current = None
             proc = spawn_browser(self.cfg, svc["profile"], svc["url"])
             self.current = (sid, proc)
+            self._hotkey(True)
         threading.Thread(target=self._watch, args=(proc,), daemon=True).start()
         return {"running": sid}
 
@@ -284,12 +681,14 @@ class App:
         with self.lock:
             if self.current and self.current[1] is proc:
                 self.current = None
+                self._hotkey(False)
 
     def home(self) -> dict:
         with self.lock:
             if self.current:
                 stop_proc(self.current[1])
                 self.current = None
+            self._hotkey(False)
         return {"running": None}
 
     def set_settings(self, body: dict) -> dict:
@@ -298,6 +697,22 @@ class App:
                 self.cfg["hue"] = int(body["hue"]) % 360
             if "scale" in body:
                 self.cfg["scale"] = min(3.0, max(0.75, float(body["scale"])))
+            if "profile_mode" in body:
+                if body["profile_mode"] not in ("firefox", "separate"):
+                    raise ValueError("profile_mode must be firefox or separate")
+                self.cfg["profile_mode"] = body["profile_mode"]
+            if "units" in body:
+                if body["units"] not in ("auto", "f", "c"):
+                    raise ValueError("units must be auto, f or c")
+                self.cfg["units"] = body["units"]
+            if "weather" in body:
+                if body["weather"] is None:
+                    self.cfg["weather"] = None
+                else:
+                    place = clean_weather(body["weather"])
+                    if not place:
+                        raise ValueError("Invalid weather location")
+                    self.cfg["weather"] = place
             save_config(self.cfg)
         return self.state()
 
@@ -308,6 +723,7 @@ class App:
         with self.lock:
             self.cfg["services"] = services
             save_config(self.cfg)
+        threading.Thread(target=self.ensure_icons, daemon=True).start()
         return self.state()
 
     def reset_services(self) -> dict:
@@ -357,7 +773,19 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/state":
             return self._send(200, self.app.state())
+        logo = re.fullmatch(r"/api/logo/([a-z0-9-]{1,40})", path)
+        if logo:
+            found = find_logo(logo.group(1))
+            if not found:
+                return self._send(404, {"error": "no logo"})
+            try:
+                return self._send(200, found.read_bytes(), LOGO_EXT[found.suffix])
+            except OSError:
+                return self._send(404, {"error": "no logo"})
         entry = STATIC.get(path)
+        font = re.fullmatch(r"/fonts/([A-Za-z0-9._-]+\.(woff2|txt))", path)
+        if font:
+            entry = ("fonts/" + font.group(1), "font/woff2" if font.group(2) == "woff2" else "text/plain; charset=utf-8")
         if not entry:
             return self._send(404, {"error": "not found"})
         try:
@@ -447,6 +875,7 @@ def cmd_run(cfg: dict, with_browser: bool) -> int:
     except OSError as exc:
         print(f"Could not listen on port {cfg['port']}: {exc}", file=sys.stderr)
         return 1
+    threading.Thread(target=app.ensure_icons, daemon=True).start()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: app.stop_event.set())
 
@@ -478,7 +907,16 @@ def cmd_doctor(cfg: dict) -> int:
     print(f"  config    : {CONFIG_FILE}")
     print(f"  profiles  : {DATA_DIR / 'profiles'}")
     print(f"  running   : {'yes' if is_running(cfg) else 'no'}")
-    widevine = (DATA_DIR / "profiles" / "web" / "gmp-widevinecdm").exists()
+    login = find_login_profile(cfg)
+    if cfg["profile_mode"] == "firefox" and login:
+        print(f"  sign-ins  : using your Firefox profile {login}")
+        print(f"              {'IN USE by a running Firefox, close it first' if profile_in_use(login) else 'free'}")
+    else:
+        print("  sign-ins  : separate m3tv profile" + ("" if cfg["profile_mode"] == "separate" else " (no Firefox profile found)"))
+    comp = detect_compositor()
+    print(f"  hotkey    : {hotkey_label(cfg['home_hotkey'])} via {comp}" if comp else f"  hotkey    : no Hyprland/sway session; bind `m3tv home` to {hotkey_label(cfg['home_hotkey'])} yourself")
+    widevine = login if (cfg["profile_mode"] == "firefox" and login) else DATA_DIR / "profiles" / "web"
+    widevine = (widevine / "gmp-widevinecdm").exists()
     print(f"  widevine  : {'installed' if widevine else 'not downloaded yet (opens on first Netflix/Disney+ visit; needs internet)'}")
     if cmd and "snap" in os.path.realpath(cmd[0]):
         print("  WARNING   : snap Firefox cannot use profiles in hidden folders. Use Mozilla's .deb/apt repo or set M3TV_DATA_DIR to a visible folder.")

@@ -14,7 +14,13 @@
       <p class="label" id="date"></p>
       <h1 id="greeting">Welcome</h1>
     </div>
-    <div class="clock" id="clock" aria-live="off"></div>
+
+    <div class="status" aria-label="Status">
+      <button class="chip" id="weather" type="button" title="Weather"></button>
+      <div class="chip" id="net" role="img" aria-label="Network"></div>
+      <div class="clock" id="clock" aria-live="off"></div>
+    </div>
+
     <nav class="actions" aria-label="Launcher actions">
       <button class="icon-btn" id="btn-edit" aria-label="Edit apps" title="Edit apps"></button>
       <button class="icon-btn" id="btn-add" aria-label="Add app" title="Add app"></button>
@@ -28,7 +34,7 @@
       <div class="now-text">
         <p class="label">Open now</p>
         <h2 id="now-name"></h2>
-        <p class="body">Press your mouse side button or run <code>m3tv home</code> to come back here.</p>
+        <p class="body" id="now-hint"></p>
       </div>
       <button class="btn filled" id="btn-home">Close and go home</button>
     </section>
@@ -41,6 +47,23 @@
     <h2>Settings</h2>
     <p class="label">Theme colour</p>
     <div class="swatches" id="swatches"></div>
+
+    <label class="field">
+      <span class="label">Weather location</span>
+      <div class="row">
+        <input id="wx-query" autocomplete="off" placeholder="City, State (for example Detroit, Michigan)">
+        <button class="btn tonal" type="button" id="btn-wx-find">Set</button>
+      </div>
+    </label>
+    <label class="field">
+      <span class="label">Temperature</span>
+      <select id="units">
+        <option value="auto">Automatic</option>
+        <option value="f">Fahrenheit</option>
+        <option value="c">Celsius</option>
+      </select>
+    </label>
+
     <label class="field">
       <span class="label">TV scale (restart the launcher to apply)</span>
       <select id="scale">
@@ -50,6 +73,13 @@
         <option value="1.75">175%</option>
         <option value="2">200%</option>
         <option value="2.5">250%</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="label">Sign-ins</span>
+      <select id="profile-mode">
+        <option value="firefox">Use my Firefox profile (keeps my logins)</option>
+        <option value="separate">Keep separate from my Firefox</option>
       </select>
     </label>
     <p class="body" id="browser-info"></p>
