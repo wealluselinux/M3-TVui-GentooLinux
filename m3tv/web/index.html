@@ -11,12 +11,15 @@
 
   <header class="top">
     <button class="avatar" id="btn-account" aria-label="Account" title="Account"></button>
+    <button class="search-pill" id="btn-search" aria-label="Search the Store"><span id="search-ico"></span><span>Search apps</span></button>
     <div class="tabs" role="tablist" aria-label="Sections">
       <button class="tab" role="tab" id="tab-home" aria-selected="true">Home</button>
       <button class="tab" role="tab" id="tab-apps" aria-selected="false">Apps</button>
+      <button class="tab" role="tab" id="tab-store" aria-selected="false">Store</button>
     </div>
     <span class="spacer"></span>
     <nav class="actions" aria-label="Shortcuts">
+      <button class="icon-btn" id="btn-store" aria-label="M3TV Store" title="M3TV Store"></button>
       <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings"></button>
       <button class="icon-btn" id="btn-quit" aria-label="Exit launcher" title="Exit launcher"></button>
     </nav>
@@ -56,7 +59,34 @@
       <div class="circles big" id="grid" role="list"></div>
     </section>
 
+    <section id="view-store" hidden>
+      <div class="store-head">
+        <h2>M3TV Store</h2>
+        <input id="store-q" type="search" autocomplete="off" placeholder="Search apps" aria-label="Search apps">
+      </div>
+      <div class="chips" id="store-chips" role="tablist" aria-label="Categories"></div>
+      <div id="store-body"></div>
+    </section>
   </main>
+
+  <dialog id="dlg-app">
+    <div class="app-head">
+      <div class="plate big" id="app-plate"></div>
+      <div>
+        <h2 id="app-name"></h2>
+        <p class="body" id="app-by"></p>
+      </div>
+    </div>
+    <p class="body app-desc" id="app-desc"></p>
+    <p class="label" id="app-host"></p>
+    <div class="dialog-actions">
+      <button class="btn text" id="app-remove" hidden>Remove</button>
+      <span class="spacer"></span>
+      <button class="btn tonal" id="app-close">Close</button>
+      <button class="btn filled" id="app-main"></button>
+    </div>
+  </dialog>
+
 
   <dialog id="dlg-settings">
     <h2>Settings</h2>

@@ -203,7 +203,7 @@ function fillLogo(node, svc) {
   node.classList.remove("fallback");
   const monogram = (svc.name[0] || "?").toUpperCase();
   const fallback = () => { node.replaceChildren(); node.classList.add("fallback"); node.textContent = monogram; };
-  const version = state.logos && state.logos[svc.id];
+  const version = svc.logo || (state.logos && state.logos[svc.id]);
   if (!version) { fallback(); return; }
   const img = document.createElement("img");
   img.alt = "";
@@ -247,7 +247,20 @@ function makeCircle(id, name, hue, svc) {
 }
 
 function openBuiltin(id) {
+  if (id === "builtin-store") setTab("store");
   if (id === "builtin-settings") openSettings();
+}
+
+const installed = (id) => state.services.some((x) => x.id === id);
+const catApp = (id) => catalogApps.find((a) => a.id === id);
+const picks = () => catalogApps.filter((a) => !installed(a.id));
+
+function heroItems() {
+  const mine = [...(state.recent || []).map(byId).filter(Boolean), ...state.services.filter((x) => !(state.recent || []).includes(x.id))].slice(0, 3);
+  const items = mine.map((svc) => ({ svc }));
+  picks().slice(0, mine.length ? 3 : 4).forEach((svc) => items.push({ svc, pick: true }));
+  if (!mine.length) items.unshift({ builtin: "builtin-store", welcome: true });
+  return items;
 }
 
 function heroModel() {
@@ -258,8 +271,8 @@ function heroModel() {
   }
   const run = byId(state.running);
   if (run) return { svc: run, running: true };
-  const first = byId((state.recent || [])[0]) || state.services[0];
-  return first ? { svc: first } : { builtin: "builtin-settings", welcome: true };
+  const items = heroItems();
+  return items[heroIdx % items.length] || { builtin: "builtin-store", welcome: true };
 }
 
 function renderHero(swap) {
@@ -273,11 +286,12 @@ function renderHero(swap) {
   art.className = "hero-art";
   if (m.builtin) {
     const b = BUILTIN[m.builtin];
+    const store = m.builtin === "builtin-store";
     $("#hero-eyebrow").textContent = m.welcome ? greeting() : "Built in";
     $("#hero-title").textContent = m.welcome ? "Welcome to M3 TV" : b.name;
-    $("#hero-sub").textContent = m.welcome
-      ? "Open Settings to set your theme, weather and sign-ins. More apps are coming soon."
-      : "Theme, weather, sign-ins and the home key.";
+    $("#hero-sub").textContent = store
+      ? (m.welcome ? "Your TV is empty on purpose. Open the M3TV Store to get YouTube, Netflix, Spotify and more." : "Get YouTube, Netflix, Spotify and more.")
+      : "Theme, home key, weather and sign-ins.";
     art.classList.add("glyph");
     art.replaceChildren(icon(b.glyph));
     open.textContent = "Open " + b.name;
@@ -286,21 +300,35 @@ function renderHero(swap) {
   } else {
     const svc = m.svc;
     hue = svc.hue;
-    $("#hero-eyebrow").textContent = m.running ? "Open now" : (svc.group || "Your apps");
+    $("#hero-eyebrow").textContent = m.running ? "Open now" : m.pick ? "Top pick" : (svc.group || "Your apps");
     $("#hero-title").textContent = svc.name;
     $("#hero-sub").textContent = m.running
-      ? (state.hotkey ? "Press " + state.hotkey + " to come back here." : "Run “m3tv home” (bind it to a key) to come back here.")
+      ? (state.hotkey ? "Press " + state.hotkey + " to come back here." : "Press your home key to come back here.")
       : (svc.subtitle || hostOf(svc.url));
     fillLogo(art, svc);
     open.hidden = !!m.running;
-    open.textContent = "Open " + svc.name;
-    open.onclick = () => launch(svc);
+    open.textContent = m.pick ? "Install " + svc.name : "Open " + svc.name;
+    open.onclick = () => (m.pick ? openApp(svc) : launch(svc));
   }
   home.hidden = !runSvc;
   home.textContent = runSvc ? "Close " + runSvc.name : "";
   hero.style.setProperty("--th", hue);
   setAmbient(hue);
-  $("#dots").replaceChildren();
+
+  const dots = $("#dots");
+  dots.replaceChildren();
+  const items = heroItems();
+  if (items.length > 1 && !previewId && !runSvc) {
+    items.forEach((_, i) => {
+      const d = el("button", "dot");
+      d.type = "button";
+      d.setAttribute("role", "tab");
+      d.setAttribute("aria-label", "Featured " + (i + 1));
+      d.setAttribute("aria-selected", String(i === heroIdx % items.length));
+      d.addEventListener("click", () => { heroIdx = i; renderHero(true); });
+      dots.appendChild(d);
+    });
+  }
   if (swap) {
     hero.classList.remove("swap");
     void hero.offsetWidth;
@@ -308,11 +336,39 @@ function renderHero(swap) {
   }
 }
 
+function makeCard(svc) {
+  const card = el("div", "card");
+  card.tabIndex = 0;
+  card.setAttribute("role", "listitem");
+  card.style.setProperty("--th", svc.hue);
+  const art = el("div", "art");
+  const plate = el("div", "plate");
+  fillLogo(plate, svc);
+  art.appendChild(plate);
+  card.appendChild(art);
+  const meta = el("div", "meta");
+  meta.appendChild(el("h3", null, svc.name));
+  if (svc.subtitle) meta.appendChild(el("p", null, svc.subtitle));
+  card.appendChild(meta);
+  const open = () => openApp(svc);
+  card.addEventListener("click", open);
+  card.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } });
+  return card;
+}
+
 function renderRows() {
   const rows = $("#rows");
   rows.replaceChildren();
+  const top = picks().slice(0, 12);
+  if (top.length) {
+    const cards = el("div", "rail");
+    cards.setAttribute("role", "list");
+    top.forEach((a) => cards.appendChild(makeCard(a)));
+    rows.append(el("h2", "row-title", "Top picks for you"), cards);
+  }
   const rail = el("div", "circles");
   rail.setAttribute("role", "list");
+  rail.append(makeCircle("builtin-store", "M3TV Store", state.hue));
   rail.append(makeCircle("builtin-settings", "Settings", state.hue));
   state.services.forEach((svc) => rail.append(makeCircle(svc.id, svc.name, svc.hue, svc)));
   rows.append(el("h2", "row-title", "Your apps"), rail);
@@ -334,6 +390,7 @@ function renderApps() {
     }
     grid.appendChild(wrap);
   };
+  put(makeCircle("builtin-store", "M3TV Store", state.hue), null);
   put(makeCircle("builtin-settings", "Settings", state.hue), null);
   state.services.forEach((svc) => put(makeCircle(svc.id, svc.name, svc.hue, svc), svc));
   $("#apps-title").textContent = isEditing() ? "Tap the bin to remove an app" : "Your apps";
@@ -345,10 +402,12 @@ function render() {
   document.documentElement.style.setProperty("--h", state.hue);
   $("#view-home").hidden = tab !== "home";
   $("#view-apps").hidden = tab !== "apps";
+  $("#view-store").hidden = tab !== "store";
+  $("#tab-store").setAttribute("aria-selected", String(tab === "store"));
   $("#tab-home").setAttribute("aria-selected", String(tab === "home"));
   $("#tab-apps").setAttribute("aria-selected", String(tab === "apps"));
   document.body.classList.toggle("editing", isEditing());
-  if (tab === "home") { renderHero(false); renderRows(); } else { renderApps(); }
+  if (tab === "home") { renderHero(false); renderRows(); } else if (tab === "store") { renderStore(); } else { renderApps(); }
   renderAvatar();
   renderNet();
   renderWeather();
@@ -364,7 +423,8 @@ function setTab(name) {
   editing = false;
   previewId = null;
   clearTimeout(previewTimer);
-  if (name === "apps") setAmbient(state.hue);
+  if (name !== "home") setAmbient(state.hue);
+  if (name === "store") loadCatalog();
   render();
 }
 
@@ -380,6 +440,109 @@ async function refresh() {
     renderNet();
     if (weatherKey(prev) !== weatherKey(next)) loadWeather();
   } catch (_) { /* server restarting; try again on the next tick */ }
+}
+
+// ---------- M3TV Store ----------
+async function loadCatalog() {
+  try {
+    const next = (await api("/api/catalog")).apps;
+    const key = (l) => JSON.stringify(l.map((a) => [a.id, a.logo]));
+    const changed = key(next) !== key(catalogApps);
+    catalogApps = next;
+    if (changed && !openDialogs() && tab !== "apps") render();
+  } catch (_) { /* offline server restart */ }
+}
+
+function makeTile(app) {
+  const t = el("button", "tile");
+  t.type = "button";
+  t.style.setProperty("--th", app.hue);
+  const plate = el("div", "plate");
+  fillLogo(plate, app);
+  t.append(plate, el("span", "nm", app.name), el("span", "sub", installed(app.id) ? "Installed" : app.category || ""));
+  t.addEventListener("click", () => openApp(app));
+  return t;
+}
+
+function tiles(list, wrap) {
+  const row = el("div", "tiles" + (wrap ? " wrap" : ""));
+  row.setAttribute("role", "list");
+  list.forEach((a) => row.appendChild(makeTile(a)));
+  return row;
+}
+
+function renderStore() {
+  const cats = ["Featured", ...new Set(catalogApps.map((a) => a.category))];
+  if (!cats.includes(storeCat)) storeCat = "Featured";
+  const chips = $("#store-chips");
+  chips.replaceChildren(...cats.map((c) => {
+    const p = el("button", "pill", c);
+    p.type = "button";
+    p.setAttribute("role", "tab");
+    p.setAttribute("aria-selected", String(c === storeCat && !storeQ));
+    p.addEventListener("click", () => { storeCat = c; storeQ = ""; $("#store-q").value = ""; renderStore(); });
+    return p;
+  }));
+  const body = $("#store-body");
+  body.replaceChildren();
+  if (!catalogApps.length) { body.append(el("p", "empty", "Loading apps…")); return; }
+  const q = storeQ.trim().toLowerCase();
+  if (q) {
+    const hits = catalogApps.filter((a) => (a.name + " " + (a.subtitle || "") + " " + a.category).toLowerCase().includes(q));
+    body.append(hits.length ? tiles(hits, true) : el("p", "empty", "No apps match “" + storeQ.trim() + "”. You can add any website from the Apps tab."));
+    return;
+  }
+  if (storeCat !== "Featured") { body.append(tiles(catalogApps.filter((a) => a.category === storeCat), true)); return; }
+  const feat = picks()[0] || catalogApps[0];
+  const banner = el("button", "banner");
+  banner.type = "button";
+  banner.style.setProperty("--th", feat.hue);
+  const text = el("div");
+  text.append(el("p", "eyebrow", "Featured"), el("h3", null, feat.name), el("p", null, feat.subtitle || hostOf(feat.url)));
+  const plate = el("div", "plate big");
+  fillLogo(plate, feat);
+  banner.append(plate, text);
+  banner.addEventListener("click", () => openApp(feat));
+  body.append(banner);
+  cats.slice(1).forEach((c) => {
+    body.append(el("h2", "row-title", c), tiles(catalogApps.filter((a) => a.category === c)));
+  });
+}
+
+function openApp(app) {
+  current = app;
+  const have = installed(app.id);
+  fillLogo($("#app-plate"), app);
+  $("#app-plate").style.setProperty("--th", app.hue);
+  $("#app-name").textContent = app.name;
+  $("#app-by").textContent = "M3TV Store" + (app.category ? " · " + app.category : "");
+  $("#app-desc").textContent = app.subtitle || "";
+  $("#app-host").textContent = hostOf(app.url);
+  $("#app-main").textContent = have ? "Open" : "Install";
+  $("#app-remove").hidden = !have;
+  $("#dlg-app").showModal();
+}
+
+async function appMain() {
+  const app = current;
+  if (!app) return;
+  if (installed(app.id)) { $("#dlg-app").close(); launch(byId(app.id)); return; }
+  try {
+    state = await api("/api/install", { id: app.id });
+    catalogApps = catalogApps.map((a) => (a.id === app.id ? { ...a, installed: true } : a));
+    snack(app.name + " installed. Find it on your home screen.");
+    openApp(app);
+  } catch (err) { snack(err.message); }
+}
+
+async function appRemove() {
+  const app = current;
+  if (!app) return;
+  try {
+    state = await api("/api/uninstall", { id: app.id });
+    snack(app.name + " removed");
+    openApp(app);
+  } catch (err) { snack(err.message); }
 }
 
 // ---------- actions ----------
@@ -534,6 +697,16 @@ async function setWeather() {
 
 // ---------- wiring ----------
 $("#btn-settings").append(icon("gear"));
+$("#btn-store").append(icon("store"));
+$("#search-ico").append(icon("search"));
+$("#tab-store").addEventListener("click", () => setTab("store"));
+$("#btn-store").addEventListener("click", () => setTab("store"));
+$("#btn-search").addEventListener("click", () => { setTab("store"); $("#store-q").focus(); });
+$("#store-q").addEventListener("input", () => { storeQ = $("#store-q").value; renderStore(); });
+$("#app-main").addEventListener("click", appMain);
+$("#app-remove").addEventListener("click", appRemove);
+$("#app-close").addEventListener("click", () => $("#dlg-app").close());
+$("#dlg-app").addEventListener("close", render);
 $("#btn-quit").append(icon("power"));
 
 $("#tab-home").addEventListener("click", () => setTab("home"));
@@ -587,7 +760,7 @@ window.addEventListener("offline", renderNet);
 document.addEventListener("keydown", (ev) => {
   const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
   if (!dir || openDialogs()) return;
-  const items = [...document.querySelectorAll(".circle, .tab, .icon-btn, .avatar, .btn, #weather, .del")].filter((n) => n.offsetParent !== null);
+  const items = [...document.querySelectorAll(".circle, .card, .tile, .banner, .pill, .dot, .search-pill, #store-q, .tab, .icon-btn, .avatar, .btn, #weather, .del")].filter((n) => n.offsetParent !== null);
   const cur = document.activeElement;
   if (!items.includes(cur)) {
     const first = document.querySelector("#hero-open:not([hidden])") || document.querySelector(".circle") || items[0];
@@ -613,6 +786,10 @@ document.addEventListener("keydown", (ev) => {
 
 tickClock();
 setInterval(tickClock, 15000);
-refresh().then(() => render());
+refresh().then(() => { render(); loadCatalog(); });
+setInterval(() => { if (tab !== "apps" && !catalogApps.every((a) => a.logo)) loadCatalog(); }, 3000);
+setInterval(() => {
+  if (tab === "home" && !previewId && !state.running && !openDialogs() && heroItems().length > 1) { heroIdx++; renderHero(true); }
+}, 9000);
 setInterval(refresh, 2000);
 setInterval(loadWeather, 15 * 60 * 1000);
