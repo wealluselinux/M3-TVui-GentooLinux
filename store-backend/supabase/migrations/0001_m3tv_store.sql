@@ -44,8 +44,8 @@ create table if not exists public.apps (
   icon_path text not null,
   hue int not null default 285 check (hue between 0 and 359),
   status text not null default 'pending' check (status in ('approved','pending','blocked')),
-  reasons text[] not null default '{}',
-  flags text[] not null default '{}',
+  reasons text[] not null default array[]::text[],
+  flags text[] not null default array[]::text[],
   report_count int not null default 0,
   created_at timestamptz not null default now()
 );
