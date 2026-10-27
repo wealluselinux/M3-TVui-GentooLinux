@@ -7,7 +7,7 @@ create extension if not exists pgcrypto;
 -- ---------- profiles (public username) ----------
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  username text not null unique check (username ~ '^[A-Za-z0-9_]{3,20}$'),
+  username text not null unique check (char_length(username) between 3 and 20 and username ~ '^[A-Za-z0-9_]+$'),
   created_at timestamptz not null default now()
 );
 alter table public.profiles enable row level security;
