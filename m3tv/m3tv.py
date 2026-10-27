@@ -229,6 +229,8 @@ def load_config() -> dict:
         "units": "auto",
         "recent": [],
         "catalog_sources": [],
+        "store_url": "",
+        "store_anon_key": "",
         "services": DEFAULT_SERVICES,
     }
     try:

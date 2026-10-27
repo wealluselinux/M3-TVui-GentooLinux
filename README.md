@@ -147,3 +147,21 @@ m3tv/icon.svg       app menu icon
 m3tv/web/           the Material 3 interface (HTML, CSS, JS)
 m3tv/web/fonts/     Google Sans Flex (SIL Open Font License), bundled so it works offline
 ```
+
+## M3TV Store, accounts and community apps
+
+Nothing is installed by default except Settings. Open the **Store** tab to install YouTube, Netflix,
+Spotify and the rest. Each one is just a website that opens full screen in Firefox.
+
+Community apps need a free [Supabase](https://supabase.com) project, which you set up once. Follow
+[`store-backend/README.md`](store-backend/README.md), then put the project URL and anon key in
+`m3tv/store-config.json`. After that, anyone can create an account (username, email, password) from
+the avatar button and publish an app with a name, https website, description and icon.
+
+Every submission is checked automatically and blocked if it looks like a scam: an address that
+imitates a known brand, a name that doesn't match the website, a link shortener, an IP address or
+`http://`, random letters or keyboard mashing, scam wording, or a listed phishing site. Odd cases
+(page can't be read, brand-new domain, redirects) wait for manual approval. These checks are
+heuristics and cannot catch every scam, so people can also report apps.
+
+The home key (default **Ctrl+X**, changeable in Settings) closes the open app and returns home.

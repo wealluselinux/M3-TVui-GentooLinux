@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  verifyApp, checkUrl, isPrivateIp, registrableDomain, variants, levenshtein, brandChecks, parsePage, nameMatchesSite,
+  verifyApp, checkUrl, isPrivateIp, registrableDomain, variants, levenshtein, brandChecks, parsePage, nameMatchesSite, looksRandom,
 } from "../supabase/functions/submit-app/verify.ts";
 import type { Deps } from "../supabase/functions/submit-app/verify.ts";
 
@@ -146,4 +146,18 @@ test("page parsing", () => {
   assert.deepEqual([p.title, p.siteName, p.h1, p.hasPassword], ["A & B", "Site", "Big Title", true]);
   assert.equal(nameMatchesSite("TV App", "x.example", p), true);
   assert.deepEqual(brandChecks("Plex", "app.plex.tv"), []);
+});
+
+test("random letters are detected", async () => {
+  for (const w of ["xkqzvtw", "asdfgh", "a8f3k2x", "qwertyuiop", "aaaaaa", "bcdfghj"]) assert.equal(looksRandom(w), true, w);
+  for (const w of ["Netflix", "Crunchyroll", "Strengths", "Plex", "Streamflix", "Psychology", "Tubi", "Disney", "Spotify", "Hulu", "Acme", "Aioli", "Twitch"]) assert.equal(looksRandom(w), false, w);
+  const page = (t: string) => ({ ["https://" + t + "/"]: html("x") });
+  const bad = await verifyApp(input("Xkqzvtw", "https://xkqzvtw.example"), world({ "https://xkqzvtw.example/": html("Xkqzvtw") }));
+  assert.equal(bad.status, "blocked");
+  assert.match(bad.reasons.join(" "), /random/);
+  const mash = await verifyApp(input("Cool App", "https://cool-app.example", "asdfgh jklqwe zxcvbn qwerty"), world({ "https://cool-app.example/": html("Cool App") }));
+  assert.equal(mash.status, "blocked");
+  const ok = await verifyApp(input("Cool App", "https://cool-app.example", "Watch concerts and live music from around the world."), world({ "https://cool-app.example/": html("Cool App") }));
+  assert.equal(ok.status, "approved", JSON.stringify(ok));
+  void page;
 });

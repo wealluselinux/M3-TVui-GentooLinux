@@ -353,6 +353,31 @@ export function brandChecks(name: string, host: string): string[] {
   return [...new Set(out)];
 }
 
+/** True when a word looks like keyboard mashing or random characters ("xkqzvtw", "asdfgh", "a8f3k2x"). */
+export function looksRandom(word: string): boolean {
+  const w = fold1(word).replace(/[^a-z0-9]/g, "");
+  if (w.length < 4) return false;
+  const letters = w.replace(/[0-9]/g, "");
+  if (/(.)\1{3,}/.test(w)) return true; // aaaa
+  if (/(qwert|werty|asdf|sdfg|dfgh|fghj|ghjk|hjkl|zxcv|xcvb|cvbn|vbnm|poiu|lkjh|mnbv)/.test(w)) return true;
+  if (/[0-9]/.test(w) && letters.length >= 3 && /[a-z][0-9][a-z]|[0-9][a-z][0-9]/.test(w) && w.length >= 6) return true; // a8f3k2
+  if (letters.length >= 5) {
+    if (/[^aeiouy]{6,}/.test(letters)) return true;
+    const vowels = (letters.match(/[aeiouy]/g) ?? []).length;
+    if (vowels === 0) return true;
+    if (letters.length >= 7 && vowels / letters.length < 0.1) return true;
+    if (letters.length >= 7 && vowels / letters.length > 0.8) return true;
+  }
+  return false;
+}
+
+/** Share of long-ish words in a text that look random. */
+export function randomShare(text: string): number {
+  const words = text.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4);
+  if (!words.length) return 0;
+  return words.filter(looksRandom).length / words.length;
+}
+
 export function nameMatchesSite(name: string, host: string, page: PageInfo): boolean {
   const signals = [page.title, page.siteName, page.ogTitle, page.appName, page.h1, host.replace(/\./g, " ")];
   const joined = plain(signals.join(" "));
@@ -387,6 +412,13 @@ export async function verifyApp(input: Input, deps: Deps): Promise<Verdict> {
   if (deps.blockedDomains?.has(domain)) add(reasons, "This website is on the store's blocklist.");
   if (/https?:\/\/|www\.|\.(com|net|org|tv|io|xyz|app)\b/i.test(name)) add(reasons, "Don't put a web address in the app name.");
   brandChecks(name, host).forEach((r) => add(reasons, r));
+
+  const nameWords = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (nameWords.some(looksRandom) || (nameWords.length === 1 && plain(name).length >= 4 && looksRandom(name))) {
+    add(reasons, "The app name looks like random letters. Use the real name of the website.");
+  }
+  if (domain.split(".")[0].split("-").some(looksRandom)) add(reasons, "The website address looks like random characters.");
+  if (description.length >= 10 && randomShare(description) >= 0.4) add(reasons, "The description looks like random text. Describe what the app does.");
 
   const text = `${name}\n${description}`;
   if (SCAM_TERMS.some((re) => re.test(text))) add(reasons, "The name or description uses wording that scams use.");

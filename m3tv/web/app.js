@@ -49,6 +49,7 @@ let community = [];       // approved community apps from Supabase
 let communityLoaded = false;
 let session = null;       // Supabase session { access_token, refresh_token, expires_at, user }
 try { session = JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (_) { session = null; }
+let acctMode = "in";
 let tab = "home";         // "home", "apps" or "store"
 let editing = false;
 let previewId = null;     // app shown in the hero while you point at it
@@ -203,6 +204,7 @@ function fillLogo(node, svc) {
   node.classList.remove("fallback");
   const monogram = (svc.name[0] || "?").toUpperCase();
   const fallback = () => { node.replaceChildren(); node.classList.add("fallback"); node.textContent = monogram; };
+  if (svc.iconUrl) { communityLogo(node, svc); return; }
   const version = svc.logo || (state.logos && state.logos[svc.id]);
   if (!version) { fallback(); return; }
   const img = document.createElement("img");
@@ -252,8 +254,8 @@ function openBuiltin(id) {
 }
 
 const installed = (id) => state.services.some((x) => x.id === id);
-const catApp = (id) => catalogApps.find((a) => a.id === id);
-const picks = () => catalogApps.filter((a) => !installed(a.id));
+const allApps = () => [...catalogApps, ...community];
+const picks = () => allApps().filter((a) => !installed(a.id));
 
 function heroItems() {
   const mine = [...(state.recent || []).map(byId).filter(Boolean), ...state.services.filter((x) => !(state.recent || []).includes(x.id))].slice(0, 3);
@@ -413,10 +415,6 @@ function render() {
   renderWeather();
 }
 
-function renderAvatar() {
-  const a = $("#btn-account");
-  a.replaceChildren(icon("person"));
-}
 
 function setTab(name) {
   tab = name;
@@ -424,7 +422,7 @@ function setTab(name) {
   previewId = null;
   clearTimeout(previewTimer);
   if (name !== "home") setAmbient(state.hue);
-  if (name === "store") loadCatalog();
+  if (name === "store") { loadCatalog(); loadCommunity(); }
   render();
 }
 
@@ -472,7 +470,7 @@ function tiles(list, wrap) {
 }
 
 function renderStore() {
-  const cats = ["Featured", ...new Set(catalogApps.map((a) => a.category))];
+  const cats = ["Featured", ...new Set(catalogApps.map((a) => a.category)), "Community"];
   if (!cats.includes(storeCat)) storeCat = "Featured";
   const chips = $("#store-chips");
   chips.replaceChildren(...cats.map((c) => {
@@ -488,10 +486,11 @@ function renderStore() {
   if (!catalogApps.length) { body.append(el("p", "empty", "Loading apps…")); return; }
   const q = storeQ.trim().toLowerCase();
   if (q) {
-    const hits = catalogApps.filter((a) => (a.name + " " + (a.subtitle || "") + " " + a.category).toLowerCase().includes(q));
+    const hits = allApps().filter((a) => (a.name + " " + (a.subtitle || "") + " " + a.category).toLowerCase().includes(q));
     body.append(hits.length ? tiles(hits, true) : el("p", "empty", "No apps match “" + storeQ.trim() + "”. You can add any website from the Apps tab."));
     return;
   }
+  if (storeCat === "Community") { body.append(communityBlock(true)); return; }
   if (storeCat !== "Featured") { body.append(tiles(catalogApps.filter((a) => a.category === storeCat), true)); return; }
   const feat = picks()[0] || catalogApps[0];
   const banner = el("button", "banner");
@@ -504,9 +503,16 @@ function renderStore() {
   banner.append(plate, text);
   banner.addEventListener("click", () => openApp(feat));
   body.append(banner);
-  cats.slice(1).forEach((c) => {
+  cats.slice(1, -1).forEach((c) => {
     body.append(el("h2", "row-title", c), tiles(catalogApps.filter((a) => a.category === c)));
   });
+  body.append(el("h2", "row-title", "Community"), communityBlock(false));
+}
+
+function communityBlock(wrap) {
+  if (!storeOn()) return el("p", "empty", "Community apps are not set up on this TV yet. See store-backend/README.md to connect a Supabase project.");
+  if (!community.length) return el("p", "empty", "No community apps yet. Be the first: sign in and publish one.");
+  return tiles(community, wrap);
 }
 
 function openApp(app) {
@@ -515,8 +521,9 @@ function openApp(app) {
   fillLogo($("#app-plate"), app);
   $("#app-plate").style.setProperty("--th", app.hue);
   $("#app-name").textContent = app.name;
-  $("#app-by").textContent = "M3TV Store" + (app.category ? " · " + app.category : "");
-  $("#app-desc").textContent = app.subtitle || "";
+  $("#app-by").textContent = app.community ? "Community app by " + app.publisher : "M3TV Store" + (app.category ? " · " + app.category : "");
+  $("#app-desc").textContent = app.description || app.subtitle || "";
+  $("#app-report").hidden = !app.community;
   $("#app-host").textContent = hostOf(app.url);
   $("#app-main").textContent = have ? "Open" : "Install";
   $("#app-remove").hidden = !have;
@@ -528,8 +535,12 @@ async function appMain() {
   if (!app) return;
   if (installed(app.id)) { $("#dlg-app").close(); launch(byId(app.id)); return; }
   try {
-    state = await api("/api/install", { id: app.id });
+    state = app.community
+      ? await api("/api/install-remote", { id: app.slug, name: app.name, url: app.url, description: app.description, hue: app.hue, icon_url: app.iconUrl, subtitle: "Community app" })
+      : await api("/api/install", { id: app.id });
     catalogApps = catalogApps.map((a) => (a.id === app.id ? { ...a, installed: true } : a));
+    if (app.community) app = { ...app, id: "c-" + app.slug };
+    current = app;
     snack(app.name + " installed. Find it on your home screen.");
     openApp(app);
   } catch (err) { snack(err.message); }
@@ -543,6 +554,219 @@ async function appRemove() {
     snack(app.name + " removed");
     openApp(app);
   } catch (err) { snack(err.message); }
+}
+
+// ---------- community Store (Supabase) ----------
+function saveSession(s) {
+  session = s;
+  try { s ? localStorage.setItem("m3tv.session", JSON.stringify(s)) : localStorage.removeItem("m3tv.session"); } catch (_) { /* private mode */ }
+}
+
+function headersFor(token) {
+  const key = state.store.anon_key;
+  const h = { apikey: key, "Content-Type": "application/json" };
+  const bearer = token || (key.startsWith("eyJ") ? key : "");
+  if (bearer) h.Authorization = "Bearer " + bearer;
+  return h;
+}
+
+async function sbFetch(path, opts = {}) {
+  const res = await fetch(state.store.url + path, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { /* not JSON */ }
+  if (!res.ok) throw new Error((data && (data.msg || data.message || data.error_description || data.error)) || "Store error " + res.status);
+  return data;
+}
+
+function toSession(d) {
+  const u = d.user || {};
+  return {
+    access_token: d.access_token, refresh_token: d.refresh_token,
+    expires_at: d.expires_at || Math.floor(Date.now() / 1000) + (d.expires_in || 3600),
+    user: { id: u.id, email: u.email, username: (u.user_metadata && u.user_metadata.username) || (u.email || "").split("@")[0] },
+  };
+}
+
+async function freshToken() {
+  if (!session) throw new Error("Sign in first");
+  if (session.expires_at - Date.now() / 1000 < 60) {
+    try {
+      const d = await sbFetch("/auth/v1/token?grant_type=refresh_token", { method: "POST", headers: headersFor(), body: JSON.stringify({ refresh_token: session.refresh_token }) });
+      saveSession(toSession(d));
+    } catch (_) {
+      saveSession(null);
+      renderAvatar();
+      throw new Error("Your session ended. Please sign in again.");
+    }
+  }
+  return session.access_token;
+}
+
+async function loadCommunity() {
+  if (!storeOn()) return;
+  try {
+    const rows = await sbFetch("/rest/v1/store_apps?select=*&order=created_at.desc&limit=60", { headers: headersFor() });
+    community = rows.map((r) => ({
+      id: "c-" + r.slug, slug: r.slug, remoteId: r.id, name: r.name, url: r.url, description: r.description, subtitle: r.description,
+      category: r.category, hue: r.hue, publisher: r.publisher, community: true,
+      iconUrl: state.store.url + "/storage/v1/object/public/app-icons/" + r.icon_path.split("/").map(encodeURIComponent).join("/"),
+      logo: 1,
+    }));
+    if (!openDialogs() && tab !== "apps") render();
+  } catch (_) { /* offline: keep what we have */ }
+}
+
+function communityLogo(node, app) {
+  node.replaceChildren();
+  node.classList.remove("fallback");
+  const img = document.createElement("img");
+  img.alt = "";
+  img.draggable = false;
+  img.addEventListener("error", () => { node.replaceChildren(); node.classList.add("fallback"); node.textContent = (app.name[0] || "?").toUpperCase(); });
+  img.src = app.iconUrl;
+  node.appendChild(img);
+}
+
+function renderAvatar() {
+  const a = $("#btn-account");
+  a.replaceChildren();
+  if (session) a.textContent = (session.user.username[0] || "?").toUpperCase();
+  else a.appendChild(icon("person"));
+  a.title = session ? session.user.username : "Sign in";
+}
+
+function setAcctMode(mode) {
+  acctMode = mode;
+  $("#acct-tab-in").setAttribute("aria-pressed", String(mode === "in"));
+  $("#acct-tab-up").setAttribute("aria-pressed", String(mode === "up"));
+  $("#acct-tab-in").className = "btn " + (mode === "in" ? "tonal" : "text");
+  $("#acct-tab-up").className = "btn " + (mode === "up" ? "tonal" : "text");
+  $("#acct-user-wrap").hidden = mode !== "up";
+  $("#acct-submit").textContent = mode === "up" ? "Create account" : "Sign in";
+  $("#acct-pass").autocomplete = mode === "up" ? "new-password" : "current-password";
+  $("#acct-msg").textContent = "";
+}
+
+async function renderMine() {
+  const list = $("#acct-mine");
+  list.replaceChildren(el("li", null, "Loading…"));
+  try {
+    const token = await freshToken();
+    const rows = await sbFetch("/rest/v1/apps?select=slug,name,status,reasons,flags&owner=eq." + session.user.id + "&order=created_at.desc&limit=20", { headers: headersFor(token) });
+    list.replaceChildren(...(rows.length ? rows : [{ name: "Nothing yet", status: "" }]).map((r) => {
+      const li = el("li");
+      li.append(el("span", null, r.name));
+      if (r.status) {
+        const st = el("span", "st " + r.status, r.status === "approved" ? "Live" : r.status === "pending" ? "In review" : "Blocked");
+        if (r.status !== "approved") st.title = [...(r.reasons || []), ...(r.flags || [])].join(" ");
+        li.append(st);
+      }
+      return li;
+    }));
+  } catch (err) { list.replaceChildren(el("li", null, err.message)); }
+}
+
+function openAccount() {
+  const on = storeOn();
+  $("#acct-setup").hidden = on;
+  $("#acct-out").hidden = !on || !!session;
+  $("#acct-in").hidden = !on || !session;
+  $("#acct-title").textContent = session ? "Your account" : "Sign in to M3TV";
+  if (session) { $("#acct-hello").textContent = "Signed in as " + session.user.username + " (" + session.user.email + ")."; renderMine(); }
+  else setAcctMode("in");
+  $("#dlg-account").showModal();
+}
+
+async function submitAccount(ev) {
+  ev.preventDefault();
+  const msg = $("#acct-msg");
+  const email = $("#acct-email").value.trim();
+  const password = $("#acct-pass").value;
+  msg.textContent = "";
+  try {
+    if (acctMode === "up") {
+      const username = $("#acct-user").value.trim();
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) throw new Error("Username: 3 to 20 letters, numbers or underscores.");
+      const free = await sbFetch("/rest/v1/rpc/username_available", { method: "POST", headers: headersFor(), body: JSON.stringify({ name: username }) });
+      if (!free) throw new Error("That username is taken.");
+      const d = await sbFetch("/auth/v1/signup", { method: "POST", headers: headersFor(), body: JSON.stringify({ email, password, data: { username } }) });
+      if (d && d.access_token) { saveSession(toSession(d)); }
+      else { msg.textContent = "Account created. Check your email to confirm it, then sign in."; setAcctMode("in"); $("#acct-msg").textContent = "Account created. Check your email to confirm it, then sign in."; return; }
+    } else {
+      const d = await sbFetch("/auth/v1/token?grant_type=password", { method: "POST", headers: headersFor(), body: JSON.stringify({ email, password }) });
+      saveSession(toSession(d));
+    }
+    $("#form-account").reset();
+    renderAvatar();
+    openAccount();
+    snack("Signed in as " + session.user.username);
+  } catch (err) { msg.textContent = err.message; }
+}
+
+function openPublish() {
+  if (!storeOn()) { openAccount(); return; }
+  if (!session) { snack("Sign in to publish an app"); openAccount(); return; }
+  $("#form-publish").reset();
+  $("#pub-result").hidden = true;
+  $("#pub-submit").disabled = false;
+  $("#dlg-publish").showModal();
+  $("#pub-name").focus();
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(new Error("Could not read the icon file"));
+    r.readAsDataURL(file);
+  });
+}
+
+function showVerdict(v) {
+  const box = $("#pub-result");
+  box.hidden = false;
+  box.className = "verdict " + v.status;
+  box.replaceChildren();
+  const head = { approved: "Published! Your app is now in the Store.", pending: "Submitted. It needs a manual review before it appears.", blocked: "Blocked. This app can't be published." }[v.status];
+  box.append(el("b", null, head));
+  box.scrollIntoView({ block: "nearest" });
+  const items = [...(v.reasons || []), ...(v.flags || [])];
+  if (items.length) { const ul = el("ul"); items.forEach((t) => ul.append(el("li", null, t))); box.append(ul); }
+}
+
+async function submitPublish(ev) {
+  ev.preventDefault();
+  const file = $("#pub-icon").files[0];
+  if (!file) return;
+  if (file.size > 512 * 1024) { showVerdict({ status: "blocked", reasons: ["The icon is larger than 512 KB."] }); return; }
+  $("#pub-submit").disabled = true;
+  $("#pub-submit").textContent = "Checking…";
+  try {
+    const token = await freshToken();
+    const body = {
+      name: $("#pub-name").value.trim(), url: $("#pub-url").value.trim(), description: $("#pub-desc").value.trim(),
+      category: $("#pub-cat").value, icon: await fileToBase64(file), icon_type: file.type,
+    };
+    const v = await sbFetch("/functions/v1/submit-app", { method: "POST", headers: headersFor(token), body: JSON.stringify(body) });
+    showVerdict(v);
+    if (v.status === "approved") loadCommunity();
+  } catch (err) { showVerdict({ status: "blocked", reasons: [err.message] }); }
+  $("#pub-submit").disabled = false;
+  $("#pub-submit").textContent = "Check and publish";
+}
+
+async function reportApp() {
+  const app = current;
+  if (!app || !app.community) return;
+  if (!session) { snack("Sign in to report an app"); return; }
+  const reason = (window.prompt("Why are you reporting " + app.name + "? (scam, copycat, broken…)") || "").trim();
+  if (reason.length < 3) return;
+  try {
+    const token = await freshToken();
+    await sbFetch("/rest/v1/reports", { method: "POST", headers: { ...headersFor(token), Prefer: "return=minimal" }, body: JSON.stringify({ app_id: app.remoteId, reporter: session.user.id, reason: reason.slice(0, 300) }) });
+    snack("Thanks. Reported.");
+  } catch (err) { snack(/duplicate|unique/i.test(err.message) ? "You already reported this app." : err.message); }
 }
 
 // ---------- actions ----------
@@ -714,7 +938,20 @@ $("#tab-apps").addEventListener("click", () => setTab("apps"));
 $("#btn-edit").addEventListener("click", () => { editing = !editing; render(); });
 $("#btn-add").addEventListener("click", openAdd);
 $("#btn-settings").addEventListener("click", openSettings);
-$("#btn-account").addEventListener("click", () => snack("Accounts arrive with the M3TV Store"));
+$("#btn-account").addEventListener("click", openAccount);
+$("#btn-publish").addEventListener("click", openPublish);
+$("#acct-publish").addEventListener("click", () => { $("#dlg-account").close(); openPublish(); });
+$("#acct-tab-in").addEventListener("click", () => setAcctMode("in"));
+$("#acct-tab-up").addEventListener("click", () => setAcctMode("up"));
+$("#form-account").addEventListener("submit", submitAccount);
+$("#acct-cancel").addEventListener("click", () => $("#dlg-account").close());
+$("#acct-done").addEventListener("click", () => $("#dlg-account").close());
+$("#acct-signout").addEventListener("click", () => { saveSession(null); renderAvatar(); $("#dlg-account").close(); snack("Signed out"); });
+$("#form-publish").addEventListener("submit", submitPublish);
+$("#pub-cancel").addEventListener("click", () => $("#dlg-publish").close());
+$("#app-report").addEventListener("click", reportApp);
+$("#dlg-account").addEventListener("close", render);
+$("#dlg-publish").addEventListener("close", render);
 $("#weather").addEventListener("click", openSettings);
 $("#btn-quit").addEventListener("click", async () => {
   try { await api("/api/quit", {}); } catch (_) { /* window is closing */ }
@@ -786,7 +1023,7 @@ document.addEventListener("keydown", (ev) => {
 
 tickClock();
 setInterval(tickClock, 15000);
-refresh().then(() => { render(); loadCatalog(); });
+refresh().then(() => { render(); loadCatalog(); loadCommunity(); });
 setInterval(() => { if (tab !== "apps" && !catalogApps.every((a) => a.logo)) loadCatalog(); }, 3000);
 setInterval(() => {
   if (tab === "home" && !previewId && !state.running && !openDialogs() && heroItems().length > 1) { heroIdx++; renderHero(true); }

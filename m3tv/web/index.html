@@ -63,6 +63,7 @@
       <div class="store-head">
         <h2>M3TV Store</h2>
         <input id="store-q" type="search" autocomplete="off" placeholder="Search apps" aria-label="Search apps">
+        <button class="btn filled" id="btn-publish">Publish an app</button>
       </div>
       <div class="chips" id="store-chips" role="tablist" aria-label="Categories"></div>
       <div id="store-body"></div>
@@ -80,6 +81,7 @@
     <p class="body app-desc" id="app-desc"></p>
     <p class="label" id="app-host"></p>
     <div class="dialog-actions">
+      <button class="btn text" id="app-report" hidden>Report</button>
       <button class="btn text" id="app-remove" hidden>Remove</button>
       <span class="spacer"></span>
       <button class="btn tonal" id="app-close">Close</button>
@@ -87,6 +89,65 @@
     </div>
   </dialog>
 
+
+  <dialog id="dlg-account">
+    <h2 id="acct-title">Your account</h2>
+    <p class="body note" id="acct-setup" hidden>Accounts and community apps need a Supabase project. Put its URL and anon key in <b>m3tv/store-config.json</b> (see store-backend/README.md), then restart the launcher.</p>
+    <div id="acct-out">
+      <div class="seg" role="tablist">
+        <button class="btn tonal" type="button" id="acct-tab-in" aria-pressed="true">Sign in</button>
+        <button class="btn text" type="button" id="acct-tab-up" aria-pressed="false">Create account</button>
+      </div>
+      <form id="form-account">
+        <label class="field" id="acct-user-wrap" hidden><span class="label">Username</span>
+          <input id="acct-user" maxlength="20" autocomplete="username" placeholder="3 to 20 letters, numbers or _"></label>
+        <label class="field"><span class="label">Email</span>
+          <input id="acct-email" type="email" required autocomplete="email" placeholder="you@example.com"></label>
+        <label class="field"><span class="label">Password</span>
+          <input id="acct-pass" type="password" required minlength="8" autocomplete="current-password" placeholder="At least 8 characters"></label>
+        <p class="body note" id="acct-msg"></p>
+        <div class="dialog-actions">
+          <button class="btn text" type="button" id="acct-cancel">Cancel</button>
+          <span class="spacer"></span>
+          <button class="btn filled" type="submit" id="acct-submit">Sign in</button>
+        </div>
+      </form>
+    </div>
+    <div id="acct-in" hidden>
+      <p class="body" id="acct-hello"></p>
+      <p class="label">Your published apps</p>
+      <ul class="mine" id="acct-mine"></ul>
+      <div class="dialog-actions">
+        <button class="btn text" id="acct-signout">Sign out</button>
+        <span class="spacer"></span>
+        <button class="btn tonal" id="acct-done">Done</button>
+        <button class="btn filled" id="acct-publish">Publish an app</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-publish">
+    <form id="form-publish">
+      <h2>Publish an app</h2>
+      <p class="body">Your app is a website that opens full screen on the TV. It is checked automatically before it appears in the Store.</p>
+      <label class="field"><span class="label">Name (the name the website uses)</span>
+        <input id="pub-name" required maxlength="40" autocomplete="off" placeholder="Acme Player"></label>
+      <label class="field"><span class="label">Website (https://)</span>
+        <input id="pub-url" required autocomplete="off" placeholder="https://www.example.com"></label>
+      <label class="field"><span class="label">Description</span>
+        <textarea id="pub-desc" required minlength="10" maxlength="400" rows="3" placeholder="What can people do with it?"></textarea></label>
+      <label class="field"><span class="label">Category</span>
+        <select id="pub-cat"><option>Video</option><option>Live TV</option><option>Free</option><option>Anime</option><option>Music</option><option>Games</option><option>Kids</option><option>News</option><option>More</option></select></label>
+      <label class="field"><span class="label">Icon (PNG, JPG or WebP, up to 512 KB, square works best)</span>
+        <input id="pub-icon" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+      <div class="verdict" id="pub-result" hidden></div>
+      <div class="dialog-actions">
+        <button class="btn text" type="button" id="pub-cancel">Close</button>
+        <span class="spacer"></span>
+        <button class="btn filled" type="submit" id="pub-submit">Check and publish</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="dlg-settings">
     <h2>Settings</h2>
