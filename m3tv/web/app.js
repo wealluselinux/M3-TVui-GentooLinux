@@ -5,6 +5,11 @@ const ICONS = {
   tune: "M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 14v2h8v-2h-8zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z",
   power: "M13 3h-2v10h2V3zm4.83 2.17-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z",
   del: "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  search: "M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z",
+  person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+  store: "M20 4H4v2h16V4zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1zm-9 4H6v-4h6v4z",
+  plus: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+  gear: "M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z",
 };
 
 // Simple line icons for the status bar. Constant markup only, never user data.
@@ -31,21 +36,34 @@ function wifiIcon(level, slashed) {
 const ETHERNET_ICON = `<svg ${STROKE}><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/></svg>`;
 
 const SWATCH_HUES = [285, 255, 215, 185, 150, 95, 55, 25, 350, 320];
+const SESSION_KEY = "m3tv.session";
+const BUILTIN = { "builtin-store": { name: "M3TV Store", glyph: "store" }, "builtin-settings": { name: "Settings", glyph: "gear" } };
 
 const $ = (sel) => document.querySelector(sel);
 let state = {
   services: [], logos: {}, recent: [], hue: 285, scale: 1, running: null, browser: null,
-  network: null, weather: null, units: "auto", hotkey: null,
+  network: null, weather: null, units: "auto", hotkey: null, home_hotkey: "Ctrl+X", store: { url: "", anon_key: "" },
 };
-let tab = "home";        // "home" (For you) or "apps"
-let editing = false;     // only on the Apps tab
-let previewId = null;    // app shown in the hero while you point at it
+let catalogApps = [];     // curated apps from /api/catalog
+let community = [];       // approved community apps from Supabase
+let communityLoaded = false;
+let session = null;       // Supabase session { access_token, refresh_token, expires_at, user }
+try { session = JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (_) { session = null; }
+let tab = "home";         // "home", "apps" or "store"
+let editing = false;
+let previewId = null;     // app shown in the hero while you point at it
 let previewTimer = null;
+let heroIdx = 0;
+let storeCat = "Featured";
+let storeQ = "";
 let newHue = 285;
-let wx = null;           // { temp, kind }
+let wx = null;            // { temp, kind }
+let current = null;       // app shown in the detail dialog
+let recording = false;
 
 const byId = (id) => state.services.find((s) => s.id === id);
 const isEditing = () => editing && tab === "apps";
+const storeOn = () => !!(state.store && state.store.url);
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -89,6 +107,8 @@ function greeting() {
 }
 
 function setAmbient(hue) { document.body.style.setProperty("--ah", hue); }
+
+const openDialogs = () => document.querySelector("dialog[open]");
 
 // ---------- header: clock, network, weather ----------
 function tickClock() {
@@ -177,7 +197,7 @@ async function findPlace(query) {
   return { name: match.name + (match.admin1 ? ", " + match.admin1 : match.country ? ", " + match.country : ""), lat: match.latitude, lon: match.longitude };
 }
 
-// ---------- logos, cards, hero ----------
+// ---------- logos, circles, hero ----------
 function fillLogo(node, svc) {
   node.replaceChildren();
   node.classList.remove("fallback");
@@ -197,84 +217,90 @@ function hostOf(url) {
   try { return new URL(url).host.replace(/^www\./, ""); } catch (_) { return ""; }
 }
 
-function preview(svc, delay) {
+function preview(id, hue, delay) {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => {
-    setAmbient(svc.hue);
-    if (tab === "home" && !isEditing() && previewId !== svc.id) { previewId = svc.id; renderHero(true); }
+    setAmbient(hue);
+    if (tab === "home" && !isEditing() && previewId !== id) { previewId = id; renderHero(true); }
   }, delay);
 }
 
-function makeCard(svc) {
-  const card = el("div", "card");
-  card.tabIndex = 0;
-  card.setAttribute("role", "listitem");
-  card.style.setProperty("--th", svc.hue);
-  card.dataset.id = svc.id;
-
-  const art = el("div", "art");
-  const plate = el("div", "plate");
-  fillLogo(plate, svc);
-  art.appendChild(plate);
-  if (state.running === svc.id && !isEditing()) art.appendChild(el("span", "badge", "Open"));
-
-  if (isEditing()) {
-    const del = el("button", "del");
-    del.setAttribute("aria-label", "Remove " + svc.name);
-    del.appendChild(icon("del"));
-    del.addEventListener("click", (ev) => { ev.stopPropagation(); removeService(svc.id); });
-    art.appendChild(del);
+// Logo-only circle. The name shows in the hero when you point at it.
+function makeCircle(id, name, hue, svc) {
+  const b = el("button", "circle");
+  b.type = "button";
+  b.setAttribute("role", "listitem");
+  b.setAttribute("aria-label", name);
+  b.title = name;
+  b.style.setProperty("--th", hue);
+  if (svc) {
+    fillLogo(b, svc);
+    if (state.running === id && !isEditing()) b.appendChild(el("span", "badge", "Open"));
+  } else {
+    b.classList.add("builtin");
+    b.appendChild(icon(BUILTIN[id].glyph));
   }
-  card.appendChild(art);
-
-  const meta = el("div", "meta");
-  meta.appendChild(el("h3", null, svc.name));
-  if (svc.subtitle) meta.appendChild(el("p", null, svc.subtitle));
-  card.appendChild(meta);
-
-  card.addEventListener("focus", () => preview(svc, 0));
-  card.addEventListener("mouseenter", () => preview(svc, 260));
-  if (!isEditing()) {
-    const open = () => launch(svc);
-    card.addEventListener("click", open);
-    card.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); }
-    });
-  }
-  return card;
+  b.addEventListener("focus", () => preview(id, hue, 0));
+  b.addEventListener("mouseenter", () => preview(id, hue, 220));
+  b.addEventListener("click", () => (svc ? launch(svc) : openBuiltin(id)));
+  return b;
 }
 
-function featured() {
-  return byId(previewId) || byId(state.running) || byId((state.recent || [])[0]) || state.services[0];
+function openBuiltin(id) {
+  if (id === "builtin-settings") openSettings();
+}
+
+function heroModel() {
+  if (previewId) {
+    if (BUILTIN[previewId]) return { builtin: previewId };
+    const s = byId(previewId);
+    if (s) return { svc: s };
+  }
+  const run = byId(state.running);
+  if (run) return { svc: run, running: true };
+  const first = byId((state.recent || [])[0]) || state.services[0];
+  return first ? { svc: first } : { builtin: "builtin-settings", welcome: true };
 }
 
 function renderHero(swap) {
-  const svc = featured();
-  if (!svc) return;
+  const m = heroModel();
   const hero = $("#hero");
-  const running = state.running === svc.id;
+  const art = $("#hero-art");
   const runSvc = byId(state.running);
-
-  $("#hero-eyebrow").textContent = running ? "Open now"
-    : previewId ? (svc.group || "App")
-    : (state.recent && state.recent.length ? "Pick up where you left off" : greeting());
-  $("#hero-title").textContent = svc.name;
-  $("#hero-sub").textContent = running
-    ? (state.hotkey ? "Press " + state.hotkey + " to come back here." : "Run “m3tv home” (bind it to a key) to come back here.")
-    : (svc.subtitle || hostOf(svc.url));
-
   const open = $("#hero-open");
-  open.hidden = running;
-  open.textContent = "Open " + svc.name;
-  open.onclick = () => launch(svc);
-
   const home = $("#hero-home");
+  let hue = state.hue;
+  art.className = "hero-art";
+  if (m.builtin) {
+    const b = BUILTIN[m.builtin];
+    $("#hero-eyebrow").textContent = m.welcome ? greeting() : "Built in";
+    $("#hero-title").textContent = m.welcome ? "Welcome to M3 TV" : b.name;
+    $("#hero-sub").textContent = m.welcome
+      ? "Open Settings to set your theme, weather and sign-ins. More apps are coming soon."
+      : "Theme, weather, sign-ins and the home key.";
+    art.classList.add("glyph");
+    art.replaceChildren(icon(b.glyph));
+    open.textContent = "Open " + b.name;
+    open.hidden = false;
+    open.onclick = () => openBuiltin(m.builtin);
+  } else {
+    const svc = m.svc;
+    hue = svc.hue;
+    $("#hero-eyebrow").textContent = m.running ? "Open now" : (svc.group || "Your apps");
+    $("#hero-title").textContent = svc.name;
+    $("#hero-sub").textContent = m.running
+      ? (state.hotkey ? "Press " + state.hotkey + " to come back here." : "Run “m3tv home” (bind it to a key) to come back here.")
+      : (svc.subtitle || hostOf(svc.url));
+    fillLogo(art, svc);
+    open.hidden = !!m.running;
+    open.textContent = "Open " + svc.name;
+    open.onclick = () => launch(svc);
+  }
   home.hidden = !runSvc;
-  home.textContent = running ? "Close and go home" : runSvc ? "Close " + runSvc.name : "";
-
-  fillLogo($("#hero-art"), svc);
-  hero.style.setProperty("--th", svc.hue);
-  setAmbient(svc.hue);
+  home.textContent = runSvc ? "Close " + runSvc.name : "";
+  hero.style.setProperty("--th", hue);
+  setAmbient(hue);
+  $("#dots").replaceChildren();
   if (swap) {
     hero.classList.remove("swap");
     void hero.offsetWidth;
@@ -285,27 +311,34 @@ function renderHero(swap) {
 function renderRows() {
   const rows = $("#rows");
   rows.replaceChildren();
-  const section = (title, list) => {
-    if (!list.length) return;
-    const rail = el("div", "rail");
-    rail.setAttribute("role", "list");
-    list.forEach((svc) => rail.appendChild(makeCard(svc)));
-    rows.append(el("h2", "row-title", title), rail);
-  };
-  section("Recently opened", (state.recent || []).map(byId).filter(Boolean));
-  const groups = new Map();
-  state.services.forEach((svc) => {
-    const name = svc.group || "Your apps";
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name).push(svc);
-  });
-  groups.forEach((list, name) => section(name, list));
+  const rail = el("div", "circles");
+  rail.setAttribute("role", "list");
+  rail.append(makeCircle("builtin-settings", "Settings", state.hue));
+  state.services.forEach((svc) => rail.append(makeCircle(svc.id, svc.name, svc.hue, svc)));
+  rows.append(el("h2", "row-title", "Your apps"), rail);
 }
 
 function renderApps() {
-  $("#grid").replaceChildren(...state.services.map(makeCard));
-  $("#apps-title").textContent = isEditing() ? "Tap the bin to remove an app" : "All apps";
+  const grid = $("#grid");
+  grid.replaceChildren();
+  const put = (circle, removable) => {
+    const wrap = el("div", "wrap-circle");
+    wrap.appendChild(circle);
+    if (removable && isEditing()) {
+      const del = el("button", "del");
+      del.type = "button";
+      del.setAttribute("aria-label", "Remove " + removable.name);
+      del.appendChild(icon("del"));
+      del.addEventListener("click", () => removeService(removable.id));
+      wrap.appendChild(del);
+    }
+    grid.appendChild(wrap);
+  };
+  put(makeCircle("builtin-settings", "Settings", state.hue), null);
+  state.services.forEach((svc) => put(makeCircle(svc.id, svc.name, svc.hue, svc), svc));
+  $("#apps-title").textContent = isEditing() ? "Tap the bin to remove an app" : "Your apps";
   $("#btn-edit").textContent = isEditing() ? "Done" : "Edit";
+  $("#btn-edit").hidden = state.services.length === 0;
 }
 
 function render() {
@@ -316,8 +349,14 @@ function render() {
   $("#tab-apps").setAttribute("aria-selected", String(tab === "apps"));
   document.body.classList.toggle("editing", isEditing());
   if (tab === "home") { renderHero(false); renderRows(); } else { renderApps(); }
+  renderAvatar();
   renderNet();
   renderWeather();
+}
+
+function renderAvatar() {
+  const a = $("#btn-account");
+  a.replaceChildren(icon("person"));
 }
 
 function setTab(name) {
@@ -337,7 +376,7 @@ async function refresh() {
     const next = await api("/api/state");
     const prev = state;
     state = next;
-    if (gridKey(prev) !== gridKey(next) && !document.querySelector("dialog[open]")) render();
+    if (gridKey(prev) !== gridKey(next) && !openDialogs()) render();
     renderNet();
     if (weatherKey(prev) !== weatherKey(next)) loadWeather();
   } catch (_) { /* server restarting; try again on the next tick */ }
@@ -361,14 +400,8 @@ async function goHome() {
   try { await api("/api/home", {}); previewId = null; state.running = null; render(); } catch (err) { snack(err.message); }
 }
 
-async function saveServices(list) {
-  state = await api("/api/services", { services: list });
-  render();
-}
-
 async function removeService(id) {
-  if (state.services.length <= 1) { snack("Keep at least one app"); return; }
-  try { await saveServices(state.services.filter((s) => s.id !== id)); } catch (err) { snack(err.message); }
+  try { state = await api("/api/uninstall", { id }); render(); } catch (err) { snack(err.message); }
 }
 
 function swatchRow(container, selected, onPick) {
@@ -443,7 +476,7 @@ async function setWeather() {
 }
 
 // ---------- wiring ----------
-$("#btn-settings").append(icon("tune"));
+$("#btn-settings").append(icon("gear"));
 $("#btn-quit").append(icon("power"));
 
 $("#tab-home").addEventListener("click", () => setTab("home"));
@@ -451,6 +484,7 @@ $("#tab-apps").addEventListener("click", () => setTab("apps"));
 $("#btn-edit").addEventListener("click", () => { editing = !editing; render(); });
 $("#btn-add").addEventListener("click", openAdd);
 $("#btn-settings").addEventListener("click", openSettings);
+$("#btn-account").addEventListener("click", () => snack("Accounts arrive with the M3TV Store"));
 $("#weather").addEventListener("click", openSettings);
 $("#btn-quit").addEventListener("click", async () => {
   try { await api("/api/quit", {}); } catch (_) { /* window is closing */ }
@@ -473,24 +507,13 @@ $("#profile-mode").addEventListener("change", async () => {
   catch (err) { snack(err.message); }
 });
 $("#btn-reset").addEventListener("click", async () => {
-  try { state = await api("/api/services/reset", {}); $("#dlg-settings").close(); snack("Apps reset"); } catch (err) { snack(err.message); }
+  try { state = await api("/api/services/reset", {}); $("#dlg-settings").close(); snack("Apps removed"); } catch (err) { snack(err.message); }
 });
 
 $("#btn-add-cancel").addEventListener("click", () => $("#dlg-add").close());
 $("#form-add").addEventListener("submit", async () => {
-  const entry = {
-    name: $("#add-name").value.trim(),
-    url: $("#add-url").value.trim(),
-    hue: newHue,
-    profile: $("#add-tv").checked ? "tv" : "web",
-    subtitle: "Custom app",
-  };
-  try {
-    await saveServices([...state.services, entry]);
-    snack(entry.name + " added");
-  } catch (err) {
-    snack(err.message);
-  }
+  const entry = { name: $("#add-name").value.trim(), url: $("#add-url").value.trim(), hue: newHue, profile: $("#add-tv").checked ? "tv" : "web", subtitle: "Website" };
+  try { state = await api("/api/services/add", entry); snack(entry.name + " added"); render(); } catch (err) { snack(err.message); }
 });
 
 window.addEventListener("online", renderNet);
@@ -499,25 +522,25 @@ window.addEventListener("offline", renderNet);
 // Arrow-key / D-pad navigation: jump to the nearest focusable item in that direction.
 document.addEventListener("keydown", (ev) => {
   const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
-  if (!dir || document.querySelector("dialog[open]")) return;
-  const items = [...document.querySelectorAll(".card, .tab, .icon-btn, .btn, #weather")].filter((n) => n.offsetParent !== null);
-  const current = document.activeElement;
-  if (!items.includes(current)) {
-    const first = document.querySelector("#hero-open:not([hidden])") || document.querySelector(".card") || items[0];
+  if (!dir || openDialogs()) return;
+  const items = [...document.querySelectorAll(".circle, .tab, .icon-btn, .avatar, .btn, #weather, .del")].filter((n) => n.offsetParent !== null);
+  const cur = document.activeElement;
+  if (!items.includes(cur)) {
+    const first = document.querySelector("#hero-open:not([hidden])") || document.querySelector(".circle") || items[0];
     if (first) { first.focus(); ev.preventDefault(); }
     return;
   }
-  const c = current.getBoundingClientRect();
+  const c = cur.getBoundingClientRect();
   const cx = c.left + c.width / 2, cy = c.top + c.height / 2;
   let best = null, bestScore = Infinity;
   items.forEach((n) => {
-    if (n === current) return;
+    if (n === cur) return;
     const r = n.getBoundingClientRect();
     const dx = r.left + r.width / 2 - cx, dy = r.top + r.height / 2 - cy;
     const along = dx * dir[0] + dy * dir[1];
     if (along <= 4) return;
     const across = Math.abs(dir[0] ? dy : dx);
-    if (dir[0] && across > c.height * 0.6) return; // left/right stays in the same row
+    if (dir[0] && across > c.height * 0.6) return;
     const score = along + across * 2.2;
     if (score < bestScore) { bestScore = score; best = n; }
   });

@@ -10,6 +10,8 @@ Only the Python standard library is used.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import configparser
 import json
 import os
@@ -27,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 APP_DIR = Path(__file__).resolve().parent
 WEB_DIR = APP_DIR / "web"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "m3-tvui"
@@ -36,8 +38,10 @@ DATA_DIR = Path(
     or Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "m3-tvui"
 )
 CONFIG_FILE = CONFIG_DIR / "config.json"
+CATALOG_FILE = APP_DIR / "catalog.json"
+STORE_FILE = APP_DIR / "store-config.json"
 DEFAULT_PORT = 8787
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 DEFAULT_HOTKEY = "ctrl+x"
 
 # Smart-TV user agent so youtube.com/tv serves the TV ("Leanback") interface.
@@ -48,21 +52,9 @@ TV_UA = (
 
 BROWSER_CANDIDATES = ["firefox", "firefox-bin", "firefox-esr", "librewolf"]
 
-DEFAULT_SERVICES = [
-    {"id": "youtube", "name": "YouTube", "subtitle": "Made for TVs", "url": "https://www.youtube.com/tv", "hue": 25, "profile": "tv"},
-    {"id": "youtube-tv", "name": "YouTube TV", "subtitle": "Live TV subscription", "url": "https://tv.youtube.com", "hue": 15, "profile": "web"},
-    {"id": "netflix", "name": "Netflix", "subtitle": "Movies and series", "url": "https://www.netflix.com", "hue": 20, "profile": "web"},
-    {"id": "disney", "name": "Disney+", "subtitle": "Stories for everyone", "url": "https://www.disneyplus.com", "hue": 260, "profile": "web"},
-    {"id": "prime", "name": "Prime Video", "subtitle": "Watch with Prime", "url": "https://www.primevideo.com", "hue": 235, "profile": "web"},
-    {"id": "hbo", "name": "HBO Max", "subtitle": "Series and films", "url": "https://www.hbomax.com", "hue": 300, "profile": "web"},
-    {"id": "hulu", "name": "Hulu", "subtitle": "Streaming TV", "url": "https://www.hulu.com", "hue": 150, "profile": "web"},
-    {"id": "paramount", "name": "Paramount+", "subtitle": "Shows and sports", "url": "https://www.paramountplus.com", "hue": 250, "profile": "web"},
-    {"id": "peacock", "name": "Peacock", "subtitle": "Originals and live", "url": "https://www.peacocktv.com", "hue": 95, "profile": "web"},
-    {"id": "twitch", "name": "Twitch", "subtitle": "Live streams", "url": "https://www.twitch.tv", "hue": 305, "profile": "web"},
-    {"id": "crunchyroll", "name": "Crunchyroll", "subtitle": "Anime", "url": "https://www.crunchyroll.com", "hue": 55, "profile": "web"},
-    {"id": "plex", "name": "Plex", "subtitle": "Your media library", "url": "https://app.plex.tv", "hue": 80, "profile": "web"},
-    {"id": "spotify", "name": "Spotify", "subtitle": "Music and podcasts", "url": "https://open.spotify.com", "hue": 155, "profile": "web"},
-]
+# Nothing is installed by default. The Store and Settings are built into the launcher,
+# and every streaming app comes from the Store (m3tv/catalog.json) or "Add a website".
+DEFAULT_SERVICES = []
 
 _GROUPS = {
     "youtube": "Featured", "youtube-tv": "Featured", "netflix": "Featured", "disney": "Featured",
@@ -70,9 +62,6 @@ _GROUPS = {
     "paramount": "More streaming", "peacock": "More streaming", "crunchyroll": "More streaming",
     "twitch": "Live, music and library", "plex": "Live, music and library", "spotify": "Live, music and library",
 }
-for _svc in DEFAULT_SERVICES:
-    _svc["group"] = _GROUPS.get(_svc["id"], "Your apps")
-
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
@@ -103,6 +92,8 @@ def clean_service(raw):
     sid = str(raw.get("id") or "").strip().lower()
     if not SLUG_RE.match(sid):
         sid = slugify(name)
+    if sid.startswith("builtin-"):  # reserved for the Store and Settings icons
+        sid = "app-" + sid
     try:
         hue = int(raw.get("hue", 285)) % 360
     except (TypeError, ValueError):
@@ -116,6 +107,8 @@ def clean_service(raw):
         "hue": hue,
         "profile": profile,
         "group": str(raw.get("group", "")).strip()[:30] or "Your apps",
+        "description": str(raw.get("description", "")).strip()[:400],
+        "source": "community" if raw.get("source") == "community" else "",
     }
 
 
@@ -148,6 +141,81 @@ def clean_weather(raw):
     return {"name": str(raw.get("name", "")).strip()[:60], "lat": round(lat, 4), "lon": round(lon, 4)}
 
 
+_catalog_cache = {}
+
+
+def store_config(cfg: dict) -> dict:
+    """Where the community Store (Supabase) lives: store-config.json, overridden by store_url/store_anon_key in the config."""
+    base = {}
+    try:
+        base = json.loads(STORE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    url = str(cfg.get("store_url") or base.get("url") or "").strip().rstrip("/")
+    key = str(cfg.get("store_anon_key") or base.get("anon_key") or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc or not key:
+        return {"url": "", "anon_key": ""}
+    return {"url": url, "anon_key": key}
+
+
+def load_catalog(cfg: dict) -> list:
+    """Apps offered in the Store: the bundled catalog.json plus any "catalog_sources" you list in the config."""
+    entries, seen = [], set()
+    sources = [str(CATALOG_FILE)] + [x for x in (cfg.get("catalog_sources") or []) if isinstance(x, str)]
+    for src in sources:
+        raw = None
+        try:
+            if src.startswith(("http://", "https://")):
+                cached = _catalog_cache.get(src)
+                if cached and time.time() - cached[0] < 600:
+                    raw = cached[1]
+                else:
+                    raw = json.loads(_http_get(src, 300_000)[0].decode("utf-8", "replace"))
+                    _catalog_cache[src] = (time.time(), raw)
+            else:
+                raw = json.loads(Path(src).expanduser().read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for item in raw.get("apps", []) if isinstance(raw, dict) else raw if isinstance(raw, list) else []:
+            svc = clean_service(item)
+            if not svc or svc["id"] in seen:
+                continue
+            seen.add(svc["id"])
+            svc["category"] = str(item.get("category", "")).strip()[:24] or "More"
+            entries.append(svc)
+    return entries
+
+
+HOTKEY_ALIASES = {"control": "ctrl", "win": "super", "mod": "super"}
+HOTKEY_MODS = ("ctrl", "alt", "shift", "super")
+HOTKEY_BARE = {"home", "end", "pause", "insert", "print", "menu"} | {f"f{i}" for i in range(1, 13)}
+HOTKEY_NAMED = HOTKEY_BARE | {"delete", "prior", "next", "left", "right", "up", "down", "return", "space", "tab", "backspace", "escape"}
+
+
+def normalize_hotkey(spec):
+    """Return a clean hotkey like "ctrl+x" or "home", or None if it is not allowed.
+
+    A plain letter or digit would steal normal typing, so those need Ctrl, Alt or Super.
+    Keys like Home or F9 may be used on their own."""
+    parts = [p.strip().lower() for p in str(spec or "").split("+") if p.strip()]
+    if not parts or not all(re.fullmatch(r"[a-z0-9_]+", p) for p in parts):
+        return None
+    mods = [HOTKEY_ALIASES.get(m, m) for m in parts[:-1]]
+    key = parts[-1]
+    if any(m not in HOTKEY_MODS for m in mods) or len(set(mods)) != len(mods):
+        return None
+    if re.fullmatch(r"[a-z0-9]", key):
+        if not set(mods) & {"ctrl", "alt", "super"}:
+            return None
+    elif key in HOTKEY_NAMED:
+        if not mods and key not in HOTKEY_BARE:
+            return None
+    else:
+        return None
+    return "+".join([m for m in HOTKEY_MODS if m in mods] + [key])
+
+
 def load_config() -> dict:
     cfg = {
         "port": DEFAULT_PORT,
@@ -160,6 +228,7 @@ def load_config() -> dict:
         "weather": None,
         "units": "auto",
         "recent": [],
+        "catalog_sources": [],
         "services": DEFAULT_SERVICES,
     }
     try:
@@ -189,17 +258,17 @@ def load_config() -> dict:
         cfg["scale"] = 1.0
     if cfg["profile_mode"] not in ("firefox", "separate"):
         cfg["profile_mode"] = "firefox"
+    cfg["home_hotkey"] = normalize_hotkey(cfg["home_hotkey"]) or DEFAULT_HOTKEY
+    if not isinstance(cfg.get("catalog_sources"), list):
+        cfg["catalog_sources"] = []
     cfg["weather"] = clean_weather(cfg["weather"])
     if cfg["units"] not in ("auto", "f", "c"):
         cfg["units"] = "auto"
     cfg["services"] = clean_services(cfg["services"])
     if version < 2:  # the YouTube Classic tile was removed in config version 2
         cfg["services"] = [s for s in cfg["services"] if s["id"] != "youtube-classic"]
-    cfg["services"] = cfg["services"] or clean_services(DEFAULT_SERVICES)
-    if version < 3:  # rows on the home screen: give the stock apps their groups
-        for svc in cfg["services"]:
-            if svc["group"] == "Your apps" and svc["id"] in _GROUPS:
-                svc["group"] = _GROUPS[svc["id"]]
+    if version < 4:  # v0.4: only Settings is built in; apps come later from the Store
+        cfg["services"] = []
     ids = {svc["id"] for svc in cfg["services"]}
     recent = cfg.get("recent")
     cfg["recent"] = list(dict.fromkeys(r for r in recent if isinstance(r, str) and r in ids))[:8] if isinstance(recent, list) else []
@@ -412,6 +481,27 @@ def sniff_image(data: bytes):
     if data[:4] == b"\x00\x00\x01\x00":
         return ".ico"
     return None
+
+
+def save_custom_logo(sid: str, b64) -> None:
+    """Store a logo you picked in "Add a website" in ~/.config/m3-tvui/logos (it wins over any downloaded icon)."""
+    try:
+        data = base64.b64decode(str(b64), validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError("That logo image could not be read")
+    if len(data) > 1_000_000:
+        raise ValueError("That logo image is too large (1 MB at most)")
+    ext = sniff_image(data)
+    if not ext:
+        raise ValueError("The logo must be a PNG, JPG, WebP or ICO image")
+    folder = CONFIG_DIR / "logos"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in LOGO_EXT:
+        try:
+            (folder / (sid + old)).unlink()
+        except OSError:
+            pass
+    (folder / (sid + ext)).write_bytes(data)
 
 
 def _http_get(url: str, limit: int, truncate: bool = False):
@@ -641,9 +731,12 @@ class App:
         elif not enable:
             self.hotkey_on = False
 
-    def ensure_icons(self) -> None:
+    def ensure_icons(self, include_catalog: bool = False) -> None:
         with self.lock:
             services = list(self.cfg["services"])
+            if include_catalog:
+                have = {svc["id"] for svc in services}
+                services += [e for e in load_catalog(self.cfg) if e["id"] not in have]
         for svc in services:
             if find_logo(svc["id"]):
                 continue
@@ -672,6 +765,8 @@ class App:
                 "running": running,
                 "browser": Path(cmd[0]).name if cmd else None,
                 "hotkey": hotkey_label(self.cfg.get("home_hotkey")) if self.hotkey_on else None,
+                "home_hotkey": hotkey_label(self.cfg.get("home_hotkey")),
+                "hotkey_supported": detect_compositor() is not None,
                 "profile_mode": self.cfg["profile_mode"],
                 "login_profile": login.name.split(".", 1)[-1] if login else None,
                 "network": network_status(),
@@ -679,6 +774,7 @@ class App:
                 "units": self.cfg["units"],
                 "recent": self.cfg.get("recent", []),
                 "logos": logo_versions(self.cfg["services"]),
+                "store": store_config(self.cfg),
             }
 
     def launch(self, sid: str) -> dict:
@@ -729,6 +825,17 @@ class App:
                 if body["units"] not in ("auto", "f", "c"):
                     raise ValueError("units must be auto, f or c")
                 self.cfg["units"] = body["units"]
+            if "home_hotkey" in body:
+                new_key = normalize_hotkey(body["home_hotkey"])
+                if not new_key:
+                    raise ValueError("That key is not allowed. Use Ctrl, Alt or Super with a key, or a key such as Home or F9.")
+                was_on = self.hotkey_on
+                if was_on:
+                    set_hotkey(self.cfg["home_hotkey"], False)
+                    self.hotkey_on = False
+                self.cfg["home_hotkey"] = new_key
+                if was_on:
+                    self._hotkey(True)
             if "weather" in body:
                 if body["weather"] is None:
                     self.cfg["weather"] = None
@@ -742,8 +849,6 @@ class App:
 
     def set_services(self, items) -> dict:
         services = clean_services(items)
-        if not services:
-            raise ValueError("At least one valid app is required")
         with self.lock:
             self.cfg["services"] = services
             keep = {svc["id"] for svc in services}
@@ -753,7 +858,84 @@ class App:
         return self.state()
 
     def reset_services(self) -> dict:
-        return self.set_services(DEFAULT_SERVICES)
+        return self.set_services([])
+
+    def catalog(self) -> dict:
+        with self.lock:
+            apps = load_catalog(self.cfg)
+            installed = {svc["id"] for svc in self.cfg["services"]}
+            if not getattr(self, "_catalog_icons_started", False):
+                self._catalog_icons_started = True
+                threading.Thread(target=self.ensure_icons, kwargs={"include_catalog": True}, daemon=True).start()
+        logos = logo_versions(apps)
+        return {"apps": [dict(app, installed=app["id"] in installed, logo=logos.get(app["id"])) for app in apps]}
+
+    def install(self, sid: str) -> dict:
+        with self.lock:
+            if any(svc["id"] == sid for svc in self.cfg["services"]):
+                return self.state()
+            entry = next((e for e in load_catalog(self.cfg) if e["id"] == sid), None)
+            if not entry:
+                raise KeyError("That app is not in the Store")
+            entry = {k: v for k, v in entry.items() if k != "category"}
+            self.cfg["services"] = self.cfg["services"] + [entry]
+            save_config(self.cfg)
+        threading.Thread(target=self.ensure_icons, daemon=True).start()
+        return self.state()
+
+    def install_remote(self, body: dict) -> dict:
+        """Install a community app. Its icon may only come from the configured Store host."""
+        store = store_config(self.cfg)
+        if not store["url"]:
+            raise ValueError("The community Store is not set up")
+        icon = str(body.get("icon_url", ""))
+        if urlparse(icon).netloc != urlparse(store["url"]).netloc or urlparse(icon).scheme != "https":
+            raise ValueError("Icon must come from the Store")
+        slug = re.sub(r"[^a-z0-9-]", "", str(body.get("id", "")).lower())[:37]
+        if not slug:
+            raise ValueError("Missing app id")
+        svc = clean_service({**body, "id": "c-" + slug, "source": "community", "group": "Your apps"})
+        if not svc:
+            raise ValueError("Invalid app")
+        with self.lock:
+            if any(x["id"] == svc["id"] for x in self.cfg["services"]):
+                return self.state()
+        data = _http_get(icon, 600_000)[0]
+        save_custom_logo(svc["id"], base64.b64encode(data).decode())
+        with self.lock:
+            self.cfg["services"] = self.cfg["services"] + [svc]
+            save_config(self.cfg)
+        return self.state()
+
+    def remove_service(self, sid: str) -> dict:
+        with self.lock:
+            if self.current and self.current[0] == sid:
+                stop_proc(self.current[1])
+                self.current = None
+                self._hotkey(False)
+            self.cfg["services"] = [svc for svc in self.cfg["services"] if svc["id"] != sid]
+            self.cfg["recent"] = [r for r in self.cfg.get("recent", []) if r != sid]
+            save_config(self.cfg)
+        return self.state()
+
+    def add_service(self, body: dict) -> dict:
+        svc = clean_service(body)
+        if not svc:
+            raise ValueError("Enter a name and a valid web address")
+        with self.lock:
+            ids = {s["id"] for s in self.cfg["services"]}
+            base, n = svc["id"], 2
+            while svc["id"] in ids:
+                svc["id"] = f"{base}-{n}"
+                n += 1
+            if body.get("logo"):
+                save_custom_logo(svc["id"], body["logo"])
+            self.cfg["services"] = self.cfg["services"] + [svc]
+            save_config(self.cfg)
+        threading.Thread(target=self.ensure_icons, daemon=True).start()
+        state = self.state()
+        state["added"] = svc["id"]
+        return state
 
     def shutdown(self) -> None:
         self.home()
@@ -799,6 +981,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/state":
             return self._send(200, self.app.state())
+        if path == "/api/catalog":
+            return self._send(200, self.app.catalog())
         logo = re.fullmatch(r"/api/logo/([a-z0-9-]{1,40})", path)
         if logo:
             found = find_logo(logo.group(1))
@@ -830,7 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden origin"})
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 65536:
+            if length > 2_000_000:
                 return self._send(413, {"error": "too large"})
             body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
@@ -848,6 +1032,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.app.set_settings(body))
             if path == "/api/services":
                 return self._send(200, self.app.set_services(body.get("services")))
+            if path == "/api/install":
+                return self._send(200, self.app.install(str(body.get("id", ""))))
+            if path == "/api/install-remote":
+                return self._send(200, self.app.install_remote(body))
+            if path == "/api/uninstall":
+                return self._send(200, self.app.remove_service(str(body.get("id", ""))))
+            if path == "/api/services/add":
+                return self._send(200, self.app.add_service(body))
             if path == "/api/services/reset":
                 return self._send(200, self.app.reset_services())
             if path == "/api/quit":

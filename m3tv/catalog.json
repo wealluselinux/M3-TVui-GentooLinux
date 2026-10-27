@@ -1,0 +1,32 @@
+{
+  "apps": [
+    {"id": "youtube", "name": "YouTube", "subtitle": "Made for TVs", "url": "https://www.youtube.com/tv", "hue": 25, "profile": "tv", "category": "Video"},
+    {"id": "netflix", "name": "Netflix", "subtitle": "Movies and series", "url": "https://www.netflix.com", "hue": 20, "category": "Video"},
+    {"id": "disney", "name": "Disney+", "subtitle": "Stories for everyone", "url": "https://www.disneyplus.com", "hue": 260, "category": "Video"},
+    {"id": "prime", "name": "Prime Video", "subtitle": "Watch with Prime", "url": "https://www.primevideo.com", "hue": 235, "category": "Video"},
+    {"id": "hbo", "name": "HBO Max", "subtitle": "Series and films", "url": "https://www.hbomax.com", "hue": 300, "category": "Video"},
+    {"id": "hulu", "name": "Hulu", "subtitle": "Streaming TV", "url": "https://www.hulu.com", "hue": 150, "category": "Video"},
+    {"id": "paramount", "name": "Paramount+", "subtitle": "Shows and sports", "url": "https://www.paramountplus.com", "hue": 250, "category": "Video"},
+    {"id": "peacock", "name": "Peacock", "subtitle": "Originals and live", "url": "https://www.peacocktv.com", "hue": 95, "category": "Video"},
+    {"id": "apple-tv", "name": "Apple TV", "subtitle": "Apple Originals", "url": "https://tv.apple.com", "hue": 270, "category": "Video"},
+    {"id": "vimeo", "name": "Vimeo", "subtitle": "Creator films", "url": "https://vimeo.com", "hue": 215, "category": "Video"},
+
+    {"id": "youtube-tv", "name": "YouTube TV", "subtitle": "Live TV subscription", "url": "https://tv.youtube.com", "hue": 15, "category": "Live TV"},
+    {"id": "fubo", "name": "Fubo", "subtitle": "Live sports and TV", "url": "https://www.fubo.tv", "hue": 40, "category": "Live TV"},
+    {"id": "sling", "name": "Sling TV", "subtitle": "Live TV, your way", "url": "https://www.sling.com", "hue": 235, "category": "Live TV"},
+    {"id": "philo", "name": "Philo", "subtitle": "Live TV for less", "url": "https://www.philo.com", "hue": 320, "category": "Live TV"},
+    {"id": "twitch", "name": "Twitch", "subtitle": "Live streams", "url": "https://www.twitch.tv", "hue": 305, "category": "Live TV"},
+
+    {"id": "tubi", "name": "Tubi", "subtitle": "Free movies and shows", "url": "https://tubitv.com", "hue": 285, "category": "Free"},
+    {"id": "pluto", "name": "Pluto TV", "subtitle": "Free live channels", "url": "https://pluto.tv", "hue": 85, "category": "Free"},
+    {"id": "plex", "name": "Plex", "subtitle": "Your media library", "url": "https://app.plex.tv", "hue": 80, "category": "Free"},
+    {"id": "roku-channel", "name": "The Roku Channel", "subtitle": "Free TV and movies", "url": "https://therokuchannel.roku.com", "hue": 295, "category": "Free"},
+
+    {"id": "crunchyroll", "name": "Crunchyroll", "subtitle": "Anime", "url": "https://www.crunchyroll.com", "hue": 55, "category": "Anime"},
+    {"id": "hidive", "name": "HIDIVE", "subtitle": "Anime and more", "url": "https://www.hidive.com", "hue": 225, "category": "Anime"},
+
+    {"id": "spotify", "name": "Spotify", "subtitle": "Music and podcasts", "url": "https://open.spotify.com", "hue": 155, "category": "Music"},
+    {"id": "youtube-music", "name": "YouTube Music", "subtitle": "Songs and videos", "url": "https://music.youtube.com", "hue": 20, "category": "Music"},
+    {"id": "apple-music", "name": "Apple Music", "subtitle": "Songs and radio", "url": "https://music.apple.com", "hue": 5, "category": "Music"}
+  ]
+}

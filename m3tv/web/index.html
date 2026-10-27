@@ -10,26 +10,27 @@
   <div class="backdrop" aria-hidden="true"></div>
 
   <header class="top">
+    <button class="avatar" id="btn-account" aria-label="Account" title="Account"></button>
     <div class="tabs" role="tablist" aria-label="Sections">
-      <button class="tab" role="tab" id="tab-home" aria-selected="true">For you</button>
+      <button class="tab" role="tab" id="tab-home" aria-selected="true">Home</button>
       <button class="tab" role="tab" id="tab-apps" aria-selected="false">Apps</button>
     </div>
-
+    <span class="spacer"></span>
+    <nav class="actions" aria-label="Shortcuts">
+      <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings"></button>
+      <button class="icon-btn" id="btn-quit" aria-label="Exit launcher" title="Exit launcher"></button>
+    </nav>
     <div class="status" aria-label="Status">
       <button class="chip" id="weather" type="button" title="Weather"></button>
       <div class="chip" id="net" role="img" aria-label="Network"></div>
       <div class="clock" id="clock" aria-live="off"></div>
+      <div class="brand">M3 TV</div>
     </div>
-
-    <nav class="actions" aria-label="Launcher actions">
-      <button class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings"></button>
-      <button class="icon-btn" id="btn-quit" aria-label="Exit launcher" title="Exit launcher"></button>
-    </nav>
   </header>
 
   <main>
     <section id="view-home">
-      <section class="hero" id="hero">
+      <section class="hero" id="hero" aria-live="polite">
         <div class="hero-text">
           <p class="eyebrow" id="hero-eyebrow"></p>
           <h1 id="hero-title"></h1>
@@ -40,25 +41,36 @@
           </div>
         </div>
         <div class="hero-art" id="hero-art" aria-hidden="true"></div>
+        <div class="dots" id="dots" role="tablist" aria-label="Featured"></div>
       </section>
       <div id="rows"></div>
     </section>
 
     <section id="view-apps" hidden>
       <div class="apps-bar">
-        <h2 id="apps-title">All apps</h2>
+        <h2 id="apps-title">Your apps</h2>
         <span class="spacer"></span>
         <button class="btn tonal" id="btn-edit">Edit</button>
-        <button class="btn filled" id="btn-add">Add app</button>
+        <button class="btn filled" id="btn-add">Add a website</button>
       </div>
-      <div class="grid" id="grid" role="list"></div>
+      <div class="circles big" id="grid" role="list"></div>
     </section>
+
   </main>
 
   <dialog id="dlg-settings">
     <h2>Settings</h2>
     <p class="label">Theme colour</p>
     <div class="swatches" id="swatches"></div>
+
+    <div class="field">
+      <span class="label">Home key (closes the open app and returns here)</span>
+      <div class="row">
+        <button class="btn tonal keybtn" type="button" id="btn-hotkey"></button>
+        <button class="btn text" type="button" id="btn-hotkey-reset">Reset to Ctrl+X</button>
+      </div>
+      <p class="body note" id="hotkey-note"></p>
+    </div>
 
     <label class="field">
       <span class="label">Weather location</span>
@@ -75,7 +87,6 @@
         <option value="c">Celsius</option>
       </select>
     </label>
-
     <label class="field">
       <span class="label">TV scale (restart the launcher to apply)</span>
       <select id="scale">
@@ -96,7 +107,7 @@
     </label>
     <p class="body" id="browser-info"></p>
     <div class="dialog-actions">
-      <button class="btn text" id="btn-reset">Reset apps</button>
+      <button class="btn text" id="btn-reset">Remove all apps</button>
       <span class="spacer"></span>
       <button class="btn filled" id="btn-settings-close">Done</button>
     </div>
@@ -104,15 +115,12 @@
 
   <dialog id="dlg-add">
     <form id="form-add" method="dialog">
-      <h2>Add an app</h2>
-      <label class="field">
-        <span class="label">Name</span>
-        <input id="add-name" required maxlength="40" autocomplete="off" placeholder="Crunchyroll">
-      </label>
-      <label class="field">
-        <span class="label">Website</span>
-        <input id="add-url" required autocomplete="off" placeholder="www.example.com">
-      </label>
+      <h2>Add a website</h2>
+      <p class="body">Adds a website straight to your apps on this TV only.</p>
+      <label class="field"><span class="label">Name</span>
+        <input id="add-name" required maxlength="40" autocomplete="off" placeholder="My site"></label>
+      <label class="field"><span class="label">Website</span>
+        <input id="add-url" required autocomplete="off" placeholder="www.example.com"></label>
       <p class="label">Colour</p>
       <div class="swatches" id="add-swatches"></div>
       <label class="check">
