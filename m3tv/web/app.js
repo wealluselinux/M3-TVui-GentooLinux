@@ -445,7 +445,64 @@ function openSettings() {
       : " No Firefox profile was found, so a separate one is used.";
   }
   $("#browser-info").textContent = info;
+  renderHotkey();
   $("#dlg-settings").showModal();
+}
+
+// ---------- home key ----------
+const KEYNAMES = {
+  Home: "home", End: "end", Pause: "pause", Insert: "insert", PrintScreen: "print", ContextMenu: "menu", Delete: "delete",
+  PageUp: "prior", PageDown: "next", ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+  Enter: "return", Space: "space", Tab: "tab", Backspace: "backspace",
+};
+
+function keySpec(ev) {
+  const c = ev.code;
+  if (/^(Control|Shift|Alt|Meta|OS)(Left|Right)$/.test(c)) return null; // modifier alone: keep waiting
+  let key = null;
+  if (/^Key[A-Z]$/.test(c)) key = c.slice(3).toLowerCase();
+  else if (/^Digit\d$/.test(c)) key = c.slice(5);
+  else if (/^F([1-9]|1[0-2])$/.test(c)) key = c.toLowerCase();
+  else key = KEYNAMES[c] || "";
+  const mods = [ev.ctrlKey && "ctrl", ev.altKey && "alt", ev.shiftKey && "shift", ev.metaKey && "super"].filter(Boolean);
+  return [...mods, key].join("+");
+}
+
+function renderHotkey() {
+  const btn = $("#btn-hotkey");
+  btn.classList.toggle("rec", recording);
+  btn.textContent = recording ? "Press the keys…" : (state.home_hotkey || "Ctrl+X");
+  const parts = [];
+  if (recording) parts.push("Press the key combination you want. Esc cancels.");
+  else if (!state.hotkey_supported) parts.push("Automatic key binding works on Hyprland and sway. On other desktops, bind “m3tv home” to a key in your desktop settings.");
+  else if (state.home_hotkey && !state.home_hotkey.includes("+")) parts.push("A key used on its own stops working inside apps while one is open.");
+  $("#hotkey-note").textContent = parts.join(" ");
+}
+
+function onRecordKey(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (ev.code === "Escape") { stopRecording(); return; }
+  const spec = keySpec(ev);
+  if (spec === null) return;
+  stopRecording();
+  saveHotkey(spec);
+}
+
+function stopRecording() {
+  recording = false;
+  document.removeEventListener("keydown", onRecordKey, true);
+  renderHotkey();
+}
+
+async function saveHotkey(spec) {
+  try {
+    state = await api("/api/settings", { home_hotkey: spec });
+    snack("Home key set to " + state.home_hotkey);
+  } catch (err) {
+    snack(err.message);
+  }
+  renderHotkey();
 }
 
 function openAdd() {
@@ -492,7 +549,14 @@ $("#btn-quit").addEventListener("click", async () => {
 $("#hero-home").addEventListener("click", goHome);
 
 $("#btn-settings-close").addEventListener("click", () => { $("#dlg-settings").close(); });
-$("#dlg-settings").addEventListener("close", render);
+$("#dlg-settings").addEventListener("close", () => { if (recording) stopRecording(); render(); });
+$("#btn-hotkey").addEventListener("click", () => {
+  if (recording) { stopRecording(); return; }
+  recording = true;
+  document.addEventListener("keydown", onRecordKey, true);
+  renderHotkey();
+});
+$("#btn-hotkey-reset").addEventListener("click", () => { if (recording) stopRecording(); saveHotkey("ctrl+x"); });
 $("#btn-wx-find").addEventListener("click", setWeather);
 $("#wx-query").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); setWeather(); } });
 $("#units").addEventListener("change", async () => {
