@@ -333,18 +333,28 @@ def write_user_js(profile_dir: Path, kind: str, cfg: dict) -> None:
     (profile_dir / "user.js").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def firefox_roots() -> list:
+    """Folders where Firefox keeps its profiles (classic, XDG, Flatpak, Snap)."""
+    home = Path.home()
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    roots = [
+        home / ".mozilla" / "firefox",
+        xdg / "mozilla" / "firefox",          # Firefox 147+ on Linux
+        home / ".config" / "mozilla" / "firefox",
+        home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+        home / ".var" / "app" / "org.mozilla.firefox" / "config" / "mozilla" / "firefox",
+        home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+    ]
+    return list(dict.fromkeys(roots))
+
+
 def find_login_profile(cfg: dict):
     """Find the user's everyday Firefox profile (the one with their logins)."""
     custom = cfg.get("firefox_profile")
     if custom:
         path = Path(str(custom)).expanduser()
         return path if path.is_dir() else None
-    home = Path.home()
-    roots = [
-        home / ".mozilla" / "firefox",
-        home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
-        home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
-    ]
+    roots = firefox_roots()
     for root in roots:
         ini = root / "profiles.ini"
         if not ini.is_file():
@@ -366,7 +376,22 @@ def find_login_profile(cfg: dict):
                 path = root / raw if parser.get(sec, "IsRelative", fallback="1") == "1" else Path(raw)
                 if raw and path.is_dir():
                     return path
-    return None
+    # No profiles.ini we could read: use the most recently used profile that has saved sign-ins.
+    best, best_time = None, 0.0
+    for root in roots:
+        try:
+            candidates = [d for d in root.iterdir() if d.is_dir()]
+        except OSError:
+            continue
+        for d in candidates:
+            for marker in ("cookies.sqlite", "logins.json", "prefs.js"):
+                try:
+                    mtime = (d / marker).stat().st_mtime
+                except OSError:
+                    continue
+                if mtime > best_time:
+                    best, best_time = d, mtime
+    return best
 
 
 def profile_in_use(profile: Path) -> bool:
@@ -1135,7 +1160,7 @@ def cmd_doctor(cfg: dict) -> int:
         print(f"  sign-ins  : using your Firefox profile {login}")
         print(f"              {'IN USE by a running Firefox, close it first' if profile_in_use(login) else 'free'}")
     else:
-        print("  sign-ins  : separate m3tv profile" + ("" if cfg["profile_mode"] == "separate" else " (no Firefox profile found)"))
+        print("  sign-ins  : separate m3tv profile" + ("" if cfg["profile_mode"] == "separate" else " (no Firefox profile found; looked in: " + ", ".join(str(r) for r in firefox_roots()) + ". Set \"firefox_profile\" in " + str(CONFIG_FILE) + " to its folder)"))
     comp = detect_compositor()
     print(f"  hotkey    : {hotkey_label(cfg['home_hotkey'])} via {comp}" if comp else f"  hotkey    : no Hyprland/sway session; bind `m3tv home` to {hotkey_label(cfg['home_hotkey'])} yourself")
     widevine = login if (cfg["profile_mode"] == "firefox" and login) else DATA_DIR / "profiles" / "web"
