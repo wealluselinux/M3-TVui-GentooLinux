@@ -8,6 +8,7 @@ Pending (a person approves it): page can't be read, redirects to another domain,
 These are heuristics, not proof. The database repeats the cheap rules (see 0002_client_publish.sql).
 """
 import html as htmllib
+import http.client
 import re
 import socket
 import unicodedata
@@ -298,7 +299,7 @@ def fetch_page(start, timeout=8):
             if e.code in (401, 403, 429, 503):
                 return url, ""
             raise ValueError("The website doesn't load (error %d)." % e.code)
-        except (urllib.error.URLError, OSError, TimeoutError):
+        except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException, UnicodeError):
             raise ValueError("The website did not respond.")
     raise ValueError("The website redirects too many times.")
 
@@ -356,3 +357,21 @@ def verify(name, url, description, fetch=fetch_page):
                 add(reasons, "The app name doesn't match what the website says it is. Use the name the website uses.")
     status = "blocked" if reasons else "pending" if flags else "approved"
     return {"status": status, "reasons": reasons, "flags": flags, "domain": domain}
+
+
+def verify_safe(name, url, description, limit=25):
+    """verify() with a time limit and no crashes: anything odd becomes "pending" (a person looks at it)."""
+    import concurrent.futures
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(verify, name, url, description).result(timeout=limit)
+    except concurrent.futures.TimeoutError:
+        why = "The website took too long to answer."
+    except Exception as exc:  # never let a bad site take the launcher down
+        why = "The check could not finish (%s)." % type(exc).__name__
+    finally:
+        pool.shutdown(wait=False)
+    u, bad = check_url(url)
+    if not u:
+        return {"status": "blocked", "reasons": [bad], "flags": [], "domain": ""}
+    return {"status": "pending", "reasons": [], "flags": [why], "domain": registrable_domain(u.hostname)}
