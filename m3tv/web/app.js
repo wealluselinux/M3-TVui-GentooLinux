@@ -87,7 +87,8 @@ async function api(path, body) {
   const opts = body === undefined
     ? {}
     : { method: "POST", headers: { "Content-Type": "application/json", "X-M3TV": "1" }, body: JSON.stringify(body) };
-  const res = await fetch(path, opts);
+  let res;
+  try { res = await fetch(path, opts); } catch (_) { throw new Error("The launcher isn't responding. Restart it and try again."); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
@@ -571,7 +572,8 @@ function headersFor(token) {
 }
 
 async function sbFetch(path, opts = {}) {
-  const res = await fetch(state.store.url + path, opts);
+  let res;
+  try { res = await fetch(state.store.url + path, opts); } catch (_) { throw new Error("Couldn't reach the Store. Check your internet connection and that the Supabase project is running."); }
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (_) { /* not JSON */ }
@@ -735,25 +737,44 @@ function showVerdict(v) {
   if (items.length) { const ul = el("ul"); items.forEach((t) => ul.append(el("li", null, t))); box.append(ul); }
 }
 
+const plain = (t) => String(t).toLowerCase().replace(/[^a-z0-9]/g, "");
+const IMG_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+
 async function submitPublish(ev) {
   ev.preventDefault();
   const file = $("#pub-icon").files[0];
   if (!file) return;
+  if (!IMG_EXT[file.type]) { showVerdict({ status: "blocked", reasons: ["The icon must be a PNG, JPG or WebP image."] }); return; }
   if (file.size > 512 * 1024) { showVerdict({ status: "blocked", reasons: ["The icon is larger than 512 KB."] }); return; }
   $("#pub-submit").disabled = true;
   $("#pub-submit").textContent = "Checking…";
   try {
+    const entry = { name: $("#pub-name").value.trim(), url: $("#pub-url").value.trim(), description: $("#pub-desc").value.trim() };
+    // 1. The launcher checks the website on this TV (random text, link shorteners, name vs. site, imitations).
+    const v = await api("/api/check-app", entry);
+    if (v.status === "blocked") { showVerdict(v); return; }
+    // 2. Upload the icon, then add the app. The database repeats the simple rules.
     const token = await freshToken();
-    const body = {
-      name: $("#pub-name").value.trim(), url: $("#pub-url").value.trim(), description: $("#pub-desc").value.trim(),
-      category: $("#pub-cat").value, icon: await fileToBase64(file), icon_type: file.type,
-    };
-    const v = await sbFetch("/functions/v1/submit-app", { method: "POST", headers: headersFor(token), body: JSON.stringify(body) });
+    const slug = (plain(entry.name).slice(0, 24) || "app") + "-" + Math.random().toString(36).slice(2, 8);
+    const path = session.user.id + "/" + slug + "." + IMG_EXT[file.type];
+    await sbFetch("/storage/v1/object/app-icons/" + path, {
+      method: "POST", headers: { ...headersFor(token), "Content-Type": file.type, "x-upsert": "false" }, body: file,
+    });
+    const hue = [...slug].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 360, 7);
+    await sbFetch("/rest/v1/apps", {
+      method: "POST", headers: { ...headersFor(token), Prefer: "return=minimal" },
+      body: JSON.stringify({
+        owner: session.user.id, slug, name: entry.name, url: entry.url, domain: v.domain, description: entry.description,
+        category: $("#pub-cat").value, icon_path: path, hue, status: v.status, flags: v.flags || [], reasons: [],
+      }),
+    });
     showVerdict(v);
     if (v.status === "approved") loadCommunity();
   } catch (err) { showVerdict({ status: "blocked", reasons: [err.message] }); }
-  $("#pub-submit").disabled = false;
-  $("#pub-submit").textContent = "Check and publish";
+  finally {
+    $("#pub-submit").disabled = false;
+    $("#pub-submit").textContent = "Check and publish";
+  }
 }
 
 async function reportApp() {

@@ -1036,6 +1036,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.app.set_services(body.get("services")))
             if path == "/api/install":
                 return self._send(200, self.app.install(str(body.get("id", ""))))
+            if path == "/api/check-app":
+                import store_check
+                return self._send(200, store_check.verify(str(body.get("name", ""))[:40], str(body.get("url", "")), str(body.get("description", ""))[:400]))
             if path == "/api/install-remote":
                 return self._send(200, self.app.install_remote(body))
             if path == "/api/uninstall":

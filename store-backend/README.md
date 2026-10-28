@@ -1,44 +1,39 @@
 # M3TV Store backend (Supabase)
 
-The launcher works without this: the built-in Store lists the curated apps in `m3tv/catalog.json`.
-This backend adds **community apps**: people make an account (username, email, password), upload an
-icon, a website, a name and a description, and the app is checked automatically before it appears.
+The Store works without this (curated apps in `m3tv/catalog.json`). This adds **community apps**:
+accounts (username, email, password) and publishing an app (name, https website, description, icon).
 
-## Set up (about 10 minutes)
+There is **no server function to deploy**. The launcher checks the website on the TV before upload
+(`m3tv/store_check.py`), and the database repeats the simple rules.
+
+## Set up
 
 1. Create a free project at <https://supabase.com>.
-2. **SQL Editor** → paste `supabase/migrations/0001_m3tv_store.sql` → Run.
-3. **Authentication → Providers → Email**: leave enabled. (Turn "Confirm email" off if you don't
-   want a verification email; leaving it on is safer against fake accounts.)
-4. Deploy the function (needs the [Supabase CLI](https://supabase.com/docs/guides/cli)):
-   ```sh
-   supabase login
-   supabase link --project-ref YOUR_PROJECT_REF
-   supabase functions deploy submit-app
-   # optional, free: Google Safe Browsing key for known phishing/malware lists
-   supabase secrets set SAFE_BROWSING_API_KEY=your_key
-   ```
-   Copy `verify.ts` next to `index.ts` (already there). The function runs with `--no-verify-jwt`
-   **not** set: it checks the signed-in user itself.
-5. In **Project Settings → API** copy the *Project URL* and the *anon public* key into
-   `m3tv/store-config.json`:
+2. SQL Editor: run `supabase/migrations/0001_m3tv_store.sql`, then `supabase/migrations/0002_client_publish.sql`.
+3. Optional: Authentication → Providers → Email → turn off "Confirm email" so new accounts can sign in at once.
+4. Put the Project URL and the **anon public** key in `m3tv/store-config.json`:
    ```json
    { "url": "https://abcd1234.supabase.co", "anon_key": "eyJ..." }
    ```
-   The anon key is meant to be public; the SQL policies are what protect the data.
-   Never put the `service_role` key anywhere in the launcher.
-6. `./update.sh` or `./reinstall.sh` on the TV machine, or set `store_url` / `store_anon_key` in
-   `~/.config/m3-tvui/config.json`.
+   Never put the `service_role` key anywhere in the launcher or the repo.
 
-## What the automatic check does
+## What is checked
 
-| Result | Meaning | Examples |
-| --- | --- | --- |
-| **approved** | shown in the Store immediately | name matches the site, nothing suspicious |
-| **pending** | hidden until you approve it | page can't be read, domain < 30 days old, redirects elsewhere, piracy wording, 3+ reports |
-| **blocked** | rejected, publisher sees why | imitates Netflix/YouTube/etc., name doesn't match the site, `http://`, IP address, link shortener, private network address, scam wording, Safe Browsing hit, on your blocklist |
+On the TV, before anything is uploaded:
 
-Approve or block from the SQL editor:
+| Result | When |
+| --- | --- |
+| **blocked** | link shortener, `http://`, IP/local address, random-looking name, address or description, name doesn't relate to the website, imitates a known brand, scam wording, website unreachable |
+| **pending** (you approve it) | page can't be read, redirects to another domain, piracy wording |
+| **approved** | nothing found |
+
+In the database (cannot be skipped): https only, link shorteners, your `blocked_domains` list, random-looking
+names/addresses, 3 apps per user per day, icons only in the user's own folder.
+
+**Honest limit:** the website-vs-name check runs on the TV, so someone who modifies their own launcher
+could skip it. The database rules, reports (3 reports hide an app) and the pending queue are the backstop.
+
+Review and moderate from the SQL editor:
 
 ```sql
 select slug, name, url, flags, report_count from apps where status = 'pending';
@@ -47,14 +42,8 @@ update apps set status = 'blocked' where slug = '...';
 insert into blocked_domains values ('bad-site.example', 'scam');
 ```
 
-**Honest limits:** these are heuristics. They stop lazy scams, look-alike domains and mismatched
-names, but a careful attacker can build a convincing site and wait. That is why unreadable and
-suspicious apps go to *pending*, anyone signed in can report an app, and three reports hide it
-again. Check the pending list now and then. Every community app also opens only as a website in
-Firefox (it never runs code on the TV).
-
 ## Tests
 
 ```sh
-node --test store-backend/tests/verify.test.ts    # Node 22.18+
+python3 -m unittest discover -s tests
 ```
